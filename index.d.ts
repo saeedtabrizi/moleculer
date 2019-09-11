@@ -45,6 +45,7 @@ declare namespace Moleculer {
 		| "string"
 		| "url"
 		| "uuid"
+		| boolean
 		| ActionParamSchema;
 	type ActionParams = { [key: string]: ActionParamTypes };
 
@@ -635,6 +636,7 @@ declare namespace Moleculer {
 		set(key: string, data: any, ttl?: number): PromiseLike<any>;
 		del(key: string|Array<string>): PromiseLike<any>;
 		clean(match?: string|Array<string>): PromiseLike<any>;
+		getCacheKey(actionName: string, params: object, meta: object, keys: Array<string> | null) : string;
 		client?: any;
 	}
 

@@ -25,12 +25,12 @@ $root.packets = (function() {
          * Properties of a PacketEvent.
          * @memberof packets
          * @interface IPacketEvent
-         * @property {string} ver PacketEvent ver
-         * @property {string} sender PacketEvent sender
-         * @property {string} event PacketEvent event
+         * @property {string|null} [ver] PacketEvent ver
+         * @property {string|null} [sender] PacketEvent sender
+         * @property {string|null} [event] PacketEvent event
          * @property {string|null} [data] PacketEvent data
          * @property {Array.<string>|null} [groups] PacketEvent groups
-         * @property {boolean} broadcast PacketEvent broadcast
+         * @property {boolean|null} [broadcast] PacketEvent broadcast
          */
 
 		/**
@@ -121,15 +121,19 @@ $root.packets = (function() {
 		PacketEvent.encode = function encode(message, writer) {
 			if (!writer)
 				writer = $Writer.create();
-			writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
-			writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
-			writer.uint32(/* id 3, wireType 2 =*/26).string(message.event);
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
+			if (message.event != null && message.hasOwnProperty("event"))
+				writer.uint32(/* id 3, wireType 2 =*/26).string(message.event);
 			if (message.data != null && message.hasOwnProperty("data"))
 				writer.uint32(/* id 4, wireType 2 =*/34).string(message.data);
 			if (message.groups != null && message.groups.length)
 				for (var i = 0; i < message.groups.length; ++i)
 					writer.uint32(/* id 5, wireType 2 =*/42).string(message.groups[i]);
-			writer.uint32(/* id 6, wireType 0 =*/48).bool(message.broadcast);
+			if (message.broadcast != null && message.hasOwnProperty("broadcast"))
+				writer.uint32(/* id 6, wireType 0 =*/48).bool(message.broadcast);
 			return writer;
 		};
 
@@ -189,14 +193,6 @@ $root.packets = (function() {
 						break;
 				}
 			}
-			if (!message.hasOwnProperty("ver"))
-				throw $util.ProtocolError("missing required 'ver'", { instance: message });
-			if (!message.hasOwnProperty("sender"))
-				throw $util.ProtocolError("missing required 'sender'", { instance: message });
-			if (!message.hasOwnProperty("event"))
-				throw $util.ProtocolError("missing required 'event'", { instance: message });
-			if (!message.hasOwnProperty("broadcast"))
-				throw $util.ProtocolError("missing required 'broadcast'", { instance: message });
 			return message;
 		};
 
@@ -227,12 +223,15 @@ $root.packets = (function() {
 		PacketEvent.verify = function verify(message) {
 			if (typeof message !== "object" || message === null)
 				return "object expected";
-			if (!$util.isString(message.ver))
-				return "ver: string expected";
-			if (!$util.isString(message.sender))
-				return "sender: string expected";
-			if (!$util.isString(message.event))
-				return "event: string expected";
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				if (!$util.isString(message.ver))
+					return "ver: string expected";
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				if (!$util.isString(message.sender))
+					return "sender: string expected";
+			if (message.event != null && message.hasOwnProperty("event"))
+				if (!$util.isString(message.event))
+					return "event: string expected";
 			if (message.data != null && message.hasOwnProperty("data"))
 				if (!$util.isString(message.data))
 					return "data: string expected";
@@ -243,8 +242,9 @@ $root.packets = (function() {
 					if (!$util.isString(message.groups[i]))
 						return "groups: string[] expected";
 			}
-			if (typeof message.broadcast !== "boolean")
-				return "broadcast: boolean expected";
+			if (message.broadcast != null && message.hasOwnProperty("broadcast"))
+				if (typeof message.broadcast !== "boolean")
+					return "broadcast: boolean expected";
 			return null;
 		};
 
@@ -340,14 +340,14 @@ $root.packets = (function() {
          * Properties of a PacketRequest.
          * @memberof packets
          * @interface IPacketRequest
-         * @property {string} ver PacketRequest ver
-         * @property {string} sender PacketRequest sender
-         * @property {string} id PacketRequest id
-         * @property {string} action PacketRequest action
+         * @property {string|null} [ver] PacketRequest ver
+         * @property {string|null} [sender] PacketRequest sender
+         * @property {string|null} [id] PacketRequest id
+         * @property {string|null} [action] PacketRequest action
          * @property {Uint8Array|null} [params] PacketRequest params
-         * @property {string} meta PacketRequest meta
-         * @property {number} timeout PacketRequest timeout
-         * @property {number} level PacketRequest level
+         * @property {string|null} [meta] PacketRequest meta
+         * @property {number|null} [timeout] PacketRequest timeout
+         * @property {number|null} [level] PacketRequest level
          * @property {boolean|null} [metrics] PacketRequest metrics
          * @property {string|null} [parentID] PacketRequest parentID
          * @property {string|null} [requestID] PacketRequest requestID
@@ -489,15 +489,22 @@ $root.packets = (function() {
 		PacketRequest.encode = function encode(message, writer) {
 			if (!writer)
 				writer = $Writer.create();
-			writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
-			writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
-			writer.uint32(/* id 3, wireType 2 =*/26).string(message.id);
-			writer.uint32(/* id 4, wireType 2 =*/34).string(message.action);
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
+			if (message.id != null && message.hasOwnProperty("id"))
+				writer.uint32(/* id 3, wireType 2 =*/26).string(message.id);
+			if (message.action != null && message.hasOwnProperty("action"))
+				writer.uint32(/* id 4, wireType 2 =*/34).string(message.action);
 			if (message.params != null && message.hasOwnProperty("params"))
 				writer.uint32(/* id 5, wireType 2 =*/42).bytes(message.params);
-			writer.uint32(/* id 6, wireType 2 =*/50).string(message.meta);
-			writer.uint32(/* id 7, wireType 1 =*/57).double(message.timeout);
-			writer.uint32(/* id 8, wireType 0 =*/64).int32(message.level);
+			if (message.meta != null && message.hasOwnProperty("meta"))
+				writer.uint32(/* id 6, wireType 2 =*/50).string(message.meta);
+			if (message.timeout != null && message.hasOwnProperty("timeout"))
+				writer.uint32(/* id 7, wireType 1 =*/57).double(message.timeout);
+			if (message.level != null && message.hasOwnProperty("level"))
+				writer.uint32(/* id 8, wireType 0 =*/64).int32(message.level);
 			if (message.metrics != null && message.hasOwnProperty("metrics"))
 				writer.uint32(/* id 9, wireType 0 =*/72).bool(message.metrics);
 			if (message.parentID != null && message.hasOwnProperty("parentID"))
@@ -581,20 +588,6 @@ $root.packets = (function() {
 						break;
 				}
 			}
-			if (!message.hasOwnProperty("ver"))
-				throw $util.ProtocolError("missing required 'ver'", { instance: message });
-			if (!message.hasOwnProperty("sender"))
-				throw $util.ProtocolError("missing required 'sender'", { instance: message });
-			if (!message.hasOwnProperty("id"))
-				throw $util.ProtocolError("missing required 'id'", { instance: message });
-			if (!message.hasOwnProperty("action"))
-				throw $util.ProtocolError("missing required 'action'", { instance: message });
-			if (!message.hasOwnProperty("meta"))
-				throw $util.ProtocolError("missing required 'meta'", { instance: message });
-			if (!message.hasOwnProperty("timeout"))
-				throw $util.ProtocolError("missing required 'timeout'", { instance: message });
-			if (!message.hasOwnProperty("level"))
-				throw $util.ProtocolError("missing required 'level'", { instance: message });
 			return message;
 		};
 
@@ -625,23 +618,30 @@ $root.packets = (function() {
 		PacketRequest.verify = function verify(message) {
 			if (typeof message !== "object" || message === null)
 				return "object expected";
-			if (!$util.isString(message.ver))
-				return "ver: string expected";
-			if (!$util.isString(message.sender))
-				return "sender: string expected";
-			if (!$util.isString(message.id))
-				return "id: string expected";
-			if (!$util.isString(message.action))
-				return "action: string expected";
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				if (!$util.isString(message.ver))
+					return "ver: string expected";
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				if (!$util.isString(message.sender))
+					return "sender: string expected";
+			if (message.id != null && message.hasOwnProperty("id"))
+				if (!$util.isString(message.id))
+					return "id: string expected";
+			if (message.action != null && message.hasOwnProperty("action"))
+				if (!$util.isString(message.action))
+					return "action: string expected";
 			if (message.params != null && message.hasOwnProperty("params"))
 				if (!(message.params && typeof message.params.length === "number" || $util.isString(message.params)))
 					return "params: buffer expected";
-			if (!$util.isString(message.meta))
-				return "meta: string expected";
-			if (typeof message.timeout !== "number")
-				return "timeout: number expected";
-			if (!$util.isInteger(message.level))
-				return "level: integer expected";
+			if (message.meta != null && message.hasOwnProperty("meta"))
+				if (!$util.isString(message.meta))
+					return "meta: string expected";
+			if (message.timeout != null && message.hasOwnProperty("timeout"))
+				if (typeof message.timeout !== "number")
+					return "timeout: number expected";
+			if (message.level != null && message.hasOwnProperty("level"))
+				if (!$util.isInteger(message.level))
+					return "level: integer expected";
 			if (message.metrics != null && message.hasOwnProperty("metrics"))
 				if (typeof message.metrics !== "boolean")
 					return "metrics: boolean expected";
@@ -779,13 +779,13 @@ $root.packets = (function() {
          * Properties of a PacketResponse.
          * @memberof packets
          * @interface IPacketResponse
-         * @property {string} ver PacketResponse ver
-         * @property {string} sender PacketResponse sender
-         * @property {string} id PacketResponse id
-         * @property {boolean} success PacketResponse success
+         * @property {string|null} [ver] PacketResponse ver
+         * @property {string|null} [sender] PacketResponse sender
+         * @property {string|null} [id] PacketResponse id
+         * @property {boolean|null} [success] PacketResponse success
          * @property {Uint8Array|null} [data] PacketResponse data
          * @property {string|null} [error] PacketResponse error
-         * @property {string} meta PacketResponse meta
+         * @property {string|null} [meta] PacketResponse meta
          * @property {boolean|null} [stream] PacketResponse stream
          */
 
@@ -892,15 +892,20 @@ $root.packets = (function() {
 		PacketResponse.encode = function encode(message, writer) {
 			if (!writer)
 				writer = $Writer.create();
-			writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
-			writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
-			writer.uint32(/* id 3, wireType 2 =*/26).string(message.id);
-			writer.uint32(/* id 4, wireType 0 =*/32).bool(message.success);
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
+			if (message.id != null && message.hasOwnProperty("id"))
+				writer.uint32(/* id 3, wireType 2 =*/26).string(message.id);
+			if (message.success != null && message.hasOwnProperty("success"))
+				writer.uint32(/* id 4, wireType 0 =*/32).bool(message.success);
 			if (message.data != null && message.hasOwnProperty("data"))
 				writer.uint32(/* id 5, wireType 2 =*/42).bytes(message.data);
 			if (message.error != null && message.hasOwnProperty("error"))
 				writer.uint32(/* id 6, wireType 2 =*/50).string(message.error);
-			writer.uint32(/* id 7, wireType 2 =*/58).string(message.meta);
+			if (message.meta != null && message.hasOwnProperty("meta"))
+				writer.uint32(/* id 7, wireType 2 =*/58).string(message.meta);
 			if (message.stream != null && message.hasOwnProperty("stream"))
 				writer.uint32(/* id 8, wireType 0 =*/64).bool(message.stream);
 			return writer;
@@ -966,16 +971,6 @@ $root.packets = (function() {
 						break;
 				}
 			}
-			if (!message.hasOwnProperty("ver"))
-				throw $util.ProtocolError("missing required 'ver'", { instance: message });
-			if (!message.hasOwnProperty("sender"))
-				throw $util.ProtocolError("missing required 'sender'", { instance: message });
-			if (!message.hasOwnProperty("id"))
-				throw $util.ProtocolError("missing required 'id'", { instance: message });
-			if (!message.hasOwnProperty("success"))
-				throw $util.ProtocolError("missing required 'success'", { instance: message });
-			if (!message.hasOwnProperty("meta"))
-				throw $util.ProtocolError("missing required 'meta'", { instance: message });
 			return message;
 		};
 
@@ -1006,22 +1001,27 @@ $root.packets = (function() {
 		PacketResponse.verify = function verify(message) {
 			if (typeof message !== "object" || message === null)
 				return "object expected";
-			if (!$util.isString(message.ver))
-				return "ver: string expected";
-			if (!$util.isString(message.sender))
-				return "sender: string expected";
-			if (!$util.isString(message.id))
-				return "id: string expected";
-			if (typeof message.success !== "boolean")
-				return "success: boolean expected";
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				if (!$util.isString(message.ver))
+					return "ver: string expected";
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				if (!$util.isString(message.sender))
+					return "sender: string expected";
+			if (message.id != null && message.hasOwnProperty("id"))
+				if (!$util.isString(message.id))
+					return "id: string expected";
+			if (message.success != null && message.hasOwnProperty("success"))
+				if (typeof message.success !== "boolean")
+					return "success: boolean expected";
 			if (message.data != null && message.hasOwnProperty("data"))
 				if (!(message.data && typeof message.data.length === "number" || $util.isString(message.data)))
 					return "data: buffer expected";
 			if (message.error != null && message.hasOwnProperty("error"))
 				if (!$util.isString(message.error))
 					return "error: string expected";
-			if (!$util.isString(message.meta))
-				return "meta: string expected";
+			if (message.meta != null && message.hasOwnProperty("meta"))
+				if (!$util.isString(message.meta))
+					return "meta: string expected";
 			if (message.stream != null && message.hasOwnProperty("stream"))
 				if (typeof message.stream !== "boolean")
 					return "stream: boolean expected";
@@ -1130,8 +1130,8 @@ $root.packets = (function() {
          * Properties of a PacketDiscover.
          * @memberof packets
          * @interface IPacketDiscover
-         * @property {string} ver PacketDiscover ver
-         * @property {string} sender PacketDiscover sender
+         * @property {string|null} [ver] PacketDiscover ver
+         * @property {string|null} [sender] PacketDiscover sender
          */
 
 		/**
@@ -1189,8 +1189,10 @@ $root.packets = (function() {
 		PacketDiscover.encode = function encode(message, writer) {
 			if (!writer)
 				writer = $Writer.create();
-			writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
-			writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
 			return writer;
 		};
 
@@ -1236,10 +1238,6 @@ $root.packets = (function() {
 						break;
 				}
 			}
-			if (!message.hasOwnProperty("ver"))
-				throw $util.ProtocolError("missing required 'ver'", { instance: message });
-			if (!message.hasOwnProperty("sender"))
-				throw $util.ProtocolError("missing required 'sender'", { instance: message });
 			return message;
 		};
 
@@ -1270,10 +1268,12 @@ $root.packets = (function() {
 		PacketDiscover.verify = function verify(message) {
 			if (typeof message !== "object" || message === null)
 				return "object expected";
-			if (!$util.isString(message.ver))
-				return "ver: string expected";
-			if (!$util.isString(message.sender))
-				return "sender: string expected";
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				if (!$util.isString(message.ver))
+					return "ver: string expected";
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				if (!$util.isString(message.sender))
+					return "sender: string expected";
 			return null;
 		};
 
@@ -1340,13 +1340,13 @@ $root.packets = (function() {
          * Properties of a PacketInfo.
          * @memberof packets
          * @interface IPacketInfo
-         * @property {string} ver PacketInfo ver
-         * @property {string} sender PacketInfo sender
-         * @property {string} services PacketInfo services
-         * @property {string} config PacketInfo config
+         * @property {string|null} [ver] PacketInfo ver
+         * @property {string|null} [sender] PacketInfo sender
+         * @property {string|null} [services] PacketInfo services
+         * @property {string|null} [config] PacketInfo config
          * @property {Array.<string>|null} [ipList] PacketInfo ipList
-         * @property {string} hostname PacketInfo hostname
-         * @property {packets.PacketInfo.IClient} client PacketInfo client
+         * @property {string|null} [hostname] PacketInfo hostname
+         * @property {packets.PacketInfo.IClient|null} [client] PacketInfo client
          * @property {number|null} [seq] PacketInfo seq
          */
 
@@ -1416,7 +1416,7 @@ $root.packets = (function() {
 
 		/**
          * PacketInfo client.
-         * @member {packets.PacketInfo.IClient} client
+         * @member {packets.PacketInfo.IClient|null|undefined} client
          * @memberof packets.PacketInfo
          * @instance
          */
@@ -1454,15 +1454,21 @@ $root.packets = (function() {
 		PacketInfo.encode = function encode(message, writer) {
 			if (!writer)
 				writer = $Writer.create();
-			writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
-			writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
-			writer.uint32(/* id 3, wireType 2 =*/26).string(message.services);
-			writer.uint32(/* id 4, wireType 2 =*/34).string(message.config);
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
+			if (message.services != null && message.hasOwnProperty("services"))
+				writer.uint32(/* id 3, wireType 2 =*/26).string(message.services);
+			if (message.config != null && message.hasOwnProperty("config"))
+				writer.uint32(/* id 4, wireType 2 =*/34).string(message.config);
 			if (message.ipList != null && message.ipList.length)
 				for (var i = 0; i < message.ipList.length; ++i)
 					writer.uint32(/* id 5, wireType 2 =*/42).string(message.ipList[i]);
-			writer.uint32(/* id 6, wireType 2 =*/50).string(message.hostname);
-			$root.packets.PacketInfo.Client.encode(message.client, writer.uint32(/* id 7, wireType 2 =*/58).fork()).ldelim();
+			if (message.hostname != null && message.hasOwnProperty("hostname"))
+				writer.uint32(/* id 6, wireType 2 =*/50).string(message.hostname);
+			if (message.client != null && message.hasOwnProperty("client"))
+				$root.packets.PacketInfo.Client.encode(message.client, writer.uint32(/* id 7, wireType 2 =*/58).fork()).ldelim();
 			if (message.seq != null && message.hasOwnProperty("seq"))
 				writer.uint32(/* id 8, wireType 0 =*/64).int32(message.seq);
 			return writer;
@@ -1530,18 +1536,6 @@ $root.packets = (function() {
 						break;
 				}
 			}
-			if (!message.hasOwnProperty("ver"))
-				throw $util.ProtocolError("missing required 'ver'", { instance: message });
-			if (!message.hasOwnProperty("sender"))
-				throw $util.ProtocolError("missing required 'sender'", { instance: message });
-			if (!message.hasOwnProperty("services"))
-				throw $util.ProtocolError("missing required 'services'", { instance: message });
-			if (!message.hasOwnProperty("config"))
-				throw $util.ProtocolError("missing required 'config'", { instance: message });
-			if (!message.hasOwnProperty("hostname"))
-				throw $util.ProtocolError("missing required 'hostname'", { instance: message });
-			if (!message.hasOwnProperty("client"))
-				throw $util.ProtocolError("missing required 'client'", { instance: message });
 			return message;
 		};
 
@@ -1572,14 +1566,18 @@ $root.packets = (function() {
 		PacketInfo.verify = function verify(message) {
 			if (typeof message !== "object" || message === null)
 				return "object expected";
-			if (!$util.isString(message.ver))
-				return "ver: string expected";
-			if (!$util.isString(message.sender))
-				return "sender: string expected";
-			if (!$util.isString(message.services))
-				return "services: string expected";
-			if (!$util.isString(message.config))
-				return "config: string expected";
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				if (!$util.isString(message.ver))
+					return "ver: string expected";
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				if (!$util.isString(message.sender))
+					return "sender: string expected";
+			if (message.services != null && message.hasOwnProperty("services"))
+				if (!$util.isString(message.services))
+					return "services: string expected";
+			if (message.config != null && message.hasOwnProperty("config"))
+				if (!$util.isString(message.config))
+					return "config: string expected";
 			if (message.ipList != null && message.hasOwnProperty("ipList")) {
 				if (!Array.isArray(message.ipList))
 					return "ipList: array expected";
@@ -1587,9 +1585,10 @@ $root.packets = (function() {
 					if (!$util.isString(message.ipList[i]))
 						return "ipList: string[] expected";
 			}
-			if (!$util.isString(message.hostname))
-				return "hostname: string expected";
-			{
+			if (message.hostname != null && message.hasOwnProperty("hostname"))
+				if (!$util.isString(message.hostname))
+					return "hostname: string expected";
+			if (message.client != null && message.hasOwnProperty("client")) {
 				var error = $root.packets.PacketInfo.Client.verify(message.client);
 				if (error)
 					return "client." + error;
@@ -1702,9 +1701,9 @@ $root.packets = (function() {
              * Properties of a Client.
              * @memberof packets.PacketInfo
              * @interface IClient
-             * @property {string} type Client type
-             * @property {string} version Client version
-             * @property {string} langVersion Client langVersion
+             * @property {string|null} [type] Client type
+             * @property {string|null} [version] Client version
+             * @property {string|null} [langVersion] Client langVersion
              */
 
 			/**
@@ -1770,9 +1769,12 @@ $root.packets = (function() {
 			Client.encode = function encode(message, writer) {
 				if (!writer)
 					writer = $Writer.create();
-				writer.uint32(/* id 1, wireType 2 =*/10).string(message.type);
-				writer.uint32(/* id 2, wireType 2 =*/18).string(message.version);
-				writer.uint32(/* id 3, wireType 2 =*/26).string(message.langVersion);
+				if (message.type != null && message.hasOwnProperty("type"))
+					writer.uint32(/* id 1, wireType 2 =*/10).string(message.type);
+				if (message.version != null && message.hasOwnProperty("version"))
+					writer.uint32(/* id 2, wireType 2 =*/18).string(message.version);
+				if (message.langVersion != null && message.hasOwnProperty("langVersion"))
+					writer.uint32(/* id 3, wireType 2 =*/26).string(message.langVersion);
 				return writer;
 			};
 
@@ -1821,12 +1823,6 @@ $root.packets = (function() {
 							break;
 					}
 				}
-				if (!message.hasOwnProperty("type"))
-					throw $util.ProtocolError("missing required 'type'", { instance: message });
-				if (!message.hasOwnProperty("version"))
-					throw $util.ProtocolError("missing required 'version'", { instance: message });
-				if (!message.hasOwnProperty("langVersion"))
-					throw $util.ProtocolError("missing required 'langVersion'", { instance: message });
 				return message;
 			};
 
@@ -1857,12 +1853,15 @@ $root.packets = (function() {
 			Client.verify = function verify(message) {
 				if (typeof message !== "object" || message === null)
 					return "object expected";
-				if (!$util.isString(message.type))
-					return "type: string expected";
-				if (!$util.isString(message.version))
-					return "version: string expected";
-				if (!$util.isString(message.langVersion))
-					return "langVersion: string expected";
+				if (message.type != null && message.hasOwnProperty("type"))
+					if (!$util.isString(message.type))
+						return "type: string expected";
+				if (message.version != null && message.hasOwnProperty("version"))
+					if (!$util.isString(message.version))
+						return "version: string expected";
+				if (message.langVersion != null && message.hasOwnProperty("langVersion"))
+					if (!$util.isString(message.langVersion))
+						return "langVersion: string expected";
 				return null;
 			};
 
@@ -1937,8 +1936,8 @@ $root.packets = (function() {
          * Properties of a PacketDisconnect.
          * @memberof packets
          * @interface IPacketDisconnect
-         * @property {string} ver PacketDisconnect ver
-         * @property {string} sender PacketDisconnect sender
+         * @property {string|null} [ver] PacketDisconnect ver
+         * @property {string|null} [sender] PacketDisconnect sender
          */
 
 		/**
@@ -1996,8 +1995,10 @@ $root.packets = (function() {
 		PacketDisconnect.encode = function encode(message, writer) {
 			if (!writer)
 				writer = $Writer.create();
-			writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
-			writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
 			return writer;
 		};
 
@@ -2043,10 +2044,6 @@ $root.packets = (function() {
 						break;
 				}
 			}
-			if (!message.hasOwnProperty("ver"))
-				throw $util.ProtocolError("missing required 'ver'", { instance: message });
-			if (!message.hasOwnProperty("sender"))
-				throw $util.ProtocolError("missing required 'sender'", { instance: message });
 			return message;
 		};
 
@@ -2077,10 +2074,12 @@ $root.packets = (function() {
 		PacketDisconnect.verify = function verify(message) {
 			if (typeof message !== "object" || message === null)
 				return "object expected";
-			if (!$util.isString(message.ver))
-				return "ver: string expected";
-			if (!$util.isString(message.sender))
-				return "sender: string expected";
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				if (!$util.isString(message.ver))
+					return "ver: string expected";
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				if (!$util.isString(message.sender))
+					return "sender: string expected";
 			return null;
 		};
 
@@ -2147,9 +2146,9 @@ $root.packets = (function() {
          * Properties of a PacketHeartbeat.
          * @memberof packets
          * @interface IPacketHeartbeat
-         * @property {string} ver PacketHeartbeat ver
-         * @property {string} sender PacketHeartbeat sender
-         * @property {number} cpu PacketHeartbeat cpu
+         * @property {string|null} [ver] PacketHeartbeat ver
+         * @property {string|null} [sender] PacketHeartbeat sender
+         * @property {number|null} [cpu] PacketHeartbeat cpu
          */
 
 		/**
@@ -2215,9 +2214,12 @@ $root.packets = (function() {
 		PacketHeartbeat.encode = function encode(message, writer) {
 			if (!writer)
 				writer = $Writer.create();
-			writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
-			writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
-			writer.uint32(/* id 3, wireType 1 =*/25).double(message.cpu);
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
+			if (message.cpu != null && message.hasOwnProperty("cpu"))
+				writer.uint32(/* id 3, wireType 1 =*/25).double(message.cpu);
 			return writer;
 		};
 
@@ -2266,12 +2268,6 @@ $root.packets = (function() {
 						break;
 				}
 			}
-			if (!message.hasOwnProperty("ver"))
-				throw $util.ProtocolError("missing required 'ver'", { instance: message });
-			if (!message.hasOwnProperty("sender"))
-				throw $util.ProtocolError("missing required 'sender'", { instance: message });
-			if (!message.hasOwnProperty("cpu"))
-				throw $util.ProtocolError("missing required 'cpu'", { instance: message });
 			return message;
 		};
 
@@ -2302,12 +2298,15 @@ $root.packets = (function() {
 		PacketHeartbeat.verify = function verify(message) {
 			if (typeof message !== "object" || message === null)
 				return "object expected";
-			if (!$util.isString(message.ver))
-				return "ver: string expected";
-			if (!$util.isString(message.sender))
-				return "sender: string expected";
-			if (typeof message.cpu !== "number")
-				return "cpu: number expected";
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				if (!$util.isString(message.ver))
+					return "ver: string expected";
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				if (!$util.isString(message.sender))
+					return "sender: string expected";
+			if (message.cpu != null && message.hasOwnProperty("cpu"))
+				if (typeof message.cpu !== "number")
+					return "cpu: number expected";
 			return null;
 		};
 
@@ -2379,9 +2378,9 @@ $root.packets = (function() {
          * Properties of a PacketPing.
          * @memberof packets
          * @interface IPacketPing
-         * @property {string} ver PacketPing ver
-         * @property {string} sender PacketPing sender
-         * @property {number|Long} time PacketPing time
+         * @property {string|null} [ver] PacketPing ver
+         * @property {string|null} [sender] PacketPing sender
+         * @property {number|Long|null} [time] PacketPing time
          */
 
 		/**
@@ -2447,9 +2446,12 @@ $root.packets = (function() {
 		PacketPing.encode = function encode(message, writer) {
 			if (!writer)
 				writer = $Writer.create();
-			writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
-			writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
-			writer.uint32(/* id 3, wireType 0 =*/24).int64(message.time);
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
+			if (message.time != null && message.hasOwnProperty("time"))
+				writer.uint32(/* id 3, wireType 0 =*/24).int64(message.time);
 			return writer;
 		};
 
@@ -2498,12 +2500,6 @@ $root.packets = (function() {
 						break;
 				}
 			}
-			if (!message.hasOwnProperty("ver"))
-				throw $util.ProtocolError("missing required 'ver'", { instance: message });
-			if (!message.hasOwnProperty("sender"))
-				throw $util.ProtocolError("missing required 'sender'", { instance: message });
-			if (!message.hasOwnProperty("time"))
-				throw $util.ProtocolError("missing required 'time'", { instance: message });
 			return message;
 		};
 
@@ -2534,12 +2530,15 @@ $root.packets = (function() {
 		PacketPing.verify = function verify(message) {
 			if (typeof message !== "object" || message === null)
 				return "object expected";
-			if (!$util.isString(message.ver))
-				return "ver: string expected";
-			if (!$util.isString(message.sender))
-				return "sender: string expected";
-			if (!$util.isInteger(message.time) && !(message.time && $util.isInteger(message.time.low) && $util.isInteger(message.time.high)))
-				return "time: integer|Long expected";
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				if (!$util.isString(message.ver))
+					return "ver: string expected";
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				if (!$util.isString(message.sender))
+					return "sender: string expected";
+			if (message.time != null && message.hasOwnProperty("time"))
+				if (!$util.isInteger(message.time) && !(message.time && $util.isInteger(message.time.low) && $util.isInteger(message.time.high)))
+					return "time: integer|Long expected";
 			return null;
 		};
 
@@ -2625,10 +2624,10 @@ $root.packets = (function() {
          * Properties of a PacketPong.
          * @memberof packets
          * @interface IPacketPong
-         * @property {string} ver PacketPong ver
-         * @property {string} sender PacketPong sender
-         * @property {number|Long} time PacketPong time
-         * @property {number|Long} arrived PacketPong arrived
+         * @property {string|null} [ver] PacketPong ver
+         * @property {string|null} [sender] PacketPong sender
+         * @property {number|Long|null} [time] PacketPong time
+         * @property {number|Long|null} [arrived] PacketPong arrived
          */
 
 		/**
@@ -2702,10 +2701,14 @@ $root.packets = (function() {
 		PacketPong.encode = function encode(message, writer) {
 			if (!writer)
 				writer = $Writer.create();
-			writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
-			writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
-			writer.uint32(/* id 3, wireType 0 =*/24).int64(message.time);
-			writer.uint32(/* id 4, wireType 0 =*/32).int64(message.arrived);
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
+			if (message.time != null && message.hasOwnProperty("time"))
+				writer.uint32(/* id 3, wireType 0 =*/24).int64(message.time);
+			if (message.arrived != null && message.hasOwnProperty("arrived"))
+				writer.uint32(/* id 4, wireType 0 =*/32).int64(message.arrived);
 			return writer;
 		};
 
@@ -2757,14 +2760,6 @@ $root.packets = (function() {
 						break;
 				}
 			}
-			if (!message.hasOwnProperty("ver"))
-				throw $util.ProtocolError("missing required 'ver'", { instance: message });
-			if (!message.hasOwnProperty("sender"))
-				throw $util.ProtocolError("missing required 'sender'", { instance: message });
-			if (!message.hasOwnProperty("time"))
-				throw $util.ProtocolError("missing required 'time'", { instance: message });
-			if (!message.hasOwnProperty("arrived"))
-				throw $util.ProtocolError("missing required 'arrived'", { instance: message });
 			return message;
 		};
 
@@ -2795,14 +2790,18 @@ $root.packets = (function() {
 		PacketPong.verify = function verify(message) {
 			if (typeof message !== "object" || message === null)
 				return "object expected";
-			if (!$util.isString(message.ver))
-				return "ver: string expected";
-			if (!$util.isString(message.sender))
-				return "sender: string expected";
-			if (!$util.isInteger(message.time) && !(message.time && $util.isInteger(message.time.low) && $util.isInteger(message.time.high)))
-				return "time: integer|Long expected";
-			if (!$util.isInteger(message.arrived) && !(message.arrived && $util.isInteger(message.arrived.low) && $util.isInteger(message.arrived.high)))
-				return "arrived: integer|Long expected";
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				if (!$util.isString(message.ver))
+					return "ver: string expected";
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				if (!$util.isString(message.sender))
+					return "sender: string expected";
+			if (message.time != null && message.hasOwnProperty("time"))
+				if (!$util.isInteger(message.time) && !(message.time && $util.isInteger(message.time.low) && $util.isInteger(message.time.high)))
+					return "time: integer|Long expected";
+			if (message.arrived != null && message.hasOwnProperty("arrived"))
+				if (!$util.isInteger(message.arrived) && !(message.arrived && $util.isInteger(message.arrived.low) && $util.isInteger(message.arrived.high)))
+					return "arrived: integer|Long expected";
 			return null;
 		};
 
@@ -2907,10 +2906,10 @@ $root.packets = (function() {
          * Properties of a PacketGossipHello.
          * @memberof packets
          * @interface IPacketGossipHello
-         * @property {string} ver PacketGossipHello ver
-         * @property {string} sender PacketGossipHello sender
-         * @property {string} host PacketGossipHello host
-         * @property {number} port PacketGossipHello port
+         * @property {string|null} [ver] PacketGossipHello ver
+         * @property {string|null} [sender] PacketGossipHello sender
+         * @property {string|null} [host] PacketGossipHello host
+         * @property {number|null} [port] PacketGossipHello port
          */
 
 		/**
@@ -2984,10 +2983,14 @@ $root.packets = (function() {
 		PacketGossipHello.encode = function encode(message, writer) {
 			if (!writer)
 				writer = $Writer.create();
-			writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
-			writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
-			writer.uint32(/* id 3, wireType 2 =*/26).string(message.host);
-			writer.uint32(/* id 4, wireType 0 =*/32).int32(message.port);
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
+			if (message.host != null && message.hasOwnProperty("host"))
+				writer.uint32(/* id 3, wireType 2 =*/26).string(message.host);
+			if (message.port != null && message.hasOwnProperty("port"))
+				writer.uint32(/* id 4, wireType 0 =*/32).int32(message.port);
 			return writer;
 		};
 
@@ -3039,14 +3042,6 @@ $root.packets = (function() {
 						break;
 				}
 			}
-			if (!message.hasOwnProperty("ver"))
-				throw $util.ProtocolError("missing required 'ver'", { instance: message });
-			if (!message.hasOwnProperty("sender"))
-				throw $util.ProtocolError("missing required 'sender'", { instance: message });
-			if (!message.hasOwnProperty("host"))
-				throw $util.ProtocolError("missing required 'host'", { instance: message });
-			if (!message.hasOwnProperty("port"))
-				throw $util.ProtocolError("missing required 'port'", { instance: message });
 			return message;
 		};
 
@@ -3077,14 +3072,18 @@ $root.packets = (function() {
 		PacketGossipHello.verify = function verify(message) {
 			if (typeof message !== "object" || message === null)
 				return "object expected";
-			if (!$util.isString(message.ver))
-				return "ver: string expected";
-			if (!$util.isString(message.sender))
-				return "sender: string expected";
-			if (!$util.isString(message.host))
-				return "host: string expected";
-			if (!$util.isInteger(message.port))
-				return "port: integer expected";
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				if (!$util.isString(message.ver))
+					return "ver: string expected";
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				if (!$util.isString(message.sender))
+					return "sender: string expected";
+			if (message.host != null && message.hasOwnProperty("host"))
+				if (!$util.isString(message.host))
+					return "host: string expected";
+			if (message.port != null && message.hasOwnProperty("port"))
+				if (!$util.isInteger(message.port))
+					return "port: integer expected";
 			return null;
 		};
 
@@ -3161,8 +3160,8 @@ $root.packets = (function() {
          * Properties of a PacketGossipRequest.
          * @memberof packets
          * @interface IPacketGossipRequest
-         * @property {string} ver PacketGossipRequest ver
-         * @property {string} sender PacketGossipRequest sender
+         * @property {string|null} [ver] PacketGossipRequest ver
+         * @property {string|null} [sender] PacketGossipRequest sender
          * @property {string|null} [online] PacketGossipRequest online
          * @property {string|null} [offline] PacketGossipRequest offline
          */
@@ -3238,8 +3237,10 @@ $root.packets = (function() {
 		PacketGossipRequest.encode = function encode(message, writer) {
 			if (!writer)
 				writer = $Writer.create();
-			writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
-			writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
 			if (message.online != null && message.hasOwnProperty("online"))
 				writer.uint32(/* id 3, wireType 2 =*/26).string(message.online);
 			if (message.offline != null && message.hasOwnProperty("offline"))
@@ -3295,10 +3296,6 @@ $root.packets = (function() {
 						break;
 				}
 			}
-			if (!message.hasOwnProperty("ver"))
-				throw $util.ProtocolError("missing required 'ver'", { instance: message });
-			if (!message.hasOwnProperty("sender"))
-				throw $util.ProtocolError("missing required 'sender'", { instance: message });
 			return message;
 		};
 
@@ -3329,10 +3326,12 @@ $root.packets = (function() {
 		PacketGossipRequest.verify = function verify(message) {
 			if (typeof message !== "object" || message === null)
 				return "object expected";
-			if (!$util.isString(message.ver))
-				return "ver: string expected";
-			if (!$util.isString(message.sender))
-				return "sender: string expected";
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				if (!$util.isString(message.ver))
+					return "ver: string expected";
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				if (!$util.isString(message.sender))
+					return "sender: string expected";
 			if (message.online != null && message.hasOwnProperty("online"))
 				if (!$util.isString(message.online))
 					return "online: string expected";
@@ -3415,8 +3414,8 @@ $root.packets = (function() {
          * Properties of a PacketGossipResponse.
          * @memberof packets
          * @interface IPacketGossipResponse
-         * @property {string} ver PacketGossipResponse ver
-         * @property {string} sender PacketGossipResponse sender
+         * @property {string|null} [ver] PacketGossipResponse ver
+         * @property {string|null} [sender] PacketGossipResponse sender
          * @property {string|null} [online] PacketGossipResponse online
          * @property {string|null} [offline] PacketGossipResponse offline
          */
@@ -3492,8 +3491,10 @@ $root.packets = (function() {
 		PacketGossipResponse.encode = function encode(message, writer) {
 			if (!writer)
 				writer = $Writer.create();
-			writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
-			writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				writer.uint32(/* id 1, wireType 2 =*/10).string(message.ver);
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				writer.uint32(/* id 2, wireType 2 =*/18).string(message.sender);
 			if (message.online != null && message.hasOwnProperty("online"))
 				writer.uint32(/* id 3, wireType 2 =*/26).string(message.online);
 			if (message.offline != null && message.hasOwnProperty("offline"))
@@ -3549,10 +3550,6 @@ $root.packets = (function() {
 						break;
 				}
 			}
-			if (!message.hasOwnProperty("ver"))
-				throw $util.ProtocolError("missing required 'ver'", { instance: message });
-			if (!message.hasOwnProperty("sender"))
-				throw $util.ProtocolError("missing required 'sender'", { instance: message });
 			return message;
 		};
 
@@ -3583,10 +3580,12 @@ $root.packets = (function() {
 		PacketGossipResponse.verify = function verify(message) {
 			if (typeof message !== "object" || message === null)
 				return "object expected";
-			if (!$util.isString(message.ver))
-				return "ver: string expected";
-			if (!$util.isString(message.sender))
-				return "sender: string expected";
+			if (message.ver != null && message.hasOwnProperty("ver"))
+				if (!$util.isString(message.ver))
+					return "ver: string expected";
+			if (message.sender != null && message.hasOwnProperty("sender"))
+				if (!$util.isString(message.sender))
+					return "sender: string expected";
 			if (message.online != null && message.hasOwnProperty("online"))
 				if (!$util.isString(message.online))
 					return "online: string expected";

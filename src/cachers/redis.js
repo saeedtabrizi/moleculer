@@ -8,7 +8,10 @@
 
 const Promise = require("bluebird");
 const BaseCacher = require("./base");
-const _ = require('lodash')
+const _ = require("lodash");
+const { BrokerOptionsError } = require("../errors");
+const Serializers = require("../serializers");
+
 /**
  * Cacher factory for Redis
  *
@@ -50,7 +53,20 @@ class RedisCacher extends BaseCacher {
 		 * ioredis client instance
 		 * @memberof RedisCacher
 		 */
-		this.client = new Redis(this.opts.redis);
+		if (this.opts.cluster) {
+			if (!this.opts.cluster.nodes || this.opts.cluster.nodes.length === 0) {
+				throw new BrokerOptionsError("No nodes defined for cluster");
+			}
+
+			this.logger.info("Setting Redis.Cluster Cacher");
+
+			this.client = new Redis.Cluster(this.opts.cluster.nodes, this.opts.cluster.options);
+		} else {
+			this.logger.info("Setting Redis Cacher");
+
+			this.client = new Redis(this.opts.redis);
+		}
+
 		this.client.on("connect", () => {
 			/* istanbul ignore next */
 			this.logger.info("Redis cacher connected.");
@@ -61,20 +77,20 @@ class RedisCacher extends BaseCacher {
 			this.logger.error(err);
 		});
 		try {
-			Redlock = require('redlock');
+			Redlock = require("redlock");
 		} catch (err) {
 			/* istanbul ignore next */
 			this.logger.warn("The 'redlock' package is missing. If you want to enable cache lock, please install it with 'npm install redlock --save' command.");
 		}
 		if (Redlock) {
-			let redlockClients = (this.opts.redlock ? this.opts.redlock.clients : null) || [this.client]
+			let redlockClients = (this.opts.redlock ? this.opts.redlock.clients : null) || [this.client];
 			/**
 			 * redlock client instance
 			 * @memberof RedisCacher
 			 */
 			this.redlock = new Redlock(
 				redlockClients,
-				_.omit(this.opts.redlock, ['clients'])
+				_.omit(this.opts.redlock, ["clients"])
 			);
 			// Non-blocking redlock client, used for tryLock()
 			this.redlockNonBlocking = new Redlock(
@@ -82,7 +98,7 @@ class RedisCacher extends BaseCacher {
 				{
 					retryCount: 0
 				}
-			)
+			);
 		}
 		if (this.opts.monitor) {
 			/* istanbul ignore next */
@@ -93,6 +109,9 @@ class RedisCacher extends BaseCacher {
 				});
 			});
 		}
+
+		// create an instance of serializer (default to JSON)
+		this.serializer = Serializers.resolve(this.opts.serializer);
 
 		this.logger.debug("Redis Cacher created. Prefix: " + this.prefix);
 	}
@@ -116,11 +135,11 @@ class RedisCacher extends BaseCacher {
 	 */
 	get(key) {
 		this.logger.debug(`GET ${key}`);
-		return this.client.get(this.prefix + key).then((data) => {
+		return this.client.getBuffer(this.prefix + key).then((data) => {
 			if (data) {
 				this.logger.debug(`FOUND ${key}`);
 				try {
-					return JSON.parse(data);
+					return this.serializer.deserialize(data);
 				} catch (err) {
 					this.logger.error("Redis result parse error.", err, data);
 				}
@@ -140,7 +159,8 @@ class RedisCacher extends BaseCacher {
 	 * @memberof Cacher
 	 */
 	set(key, data, ttl) {
-		data = JSON.stringify(data);
+		data = this.serializer.serialize(data);
+
 		this.logger.debug(`SET ${key}`);
 
 		if (ttl == null)
@@ -203,25 +223,25 @@ class RedisCacher extends BaseCacher {
 	 */
 
 	getWithTTL(key) {
-		return this.client.pipeline().get(this.prefix + key).ttl(this.prefix + key).exec().then((res) => {
-			let [err0, data] = res[0]
-			let [err1, ttl] = res[1]
+		return this.client.pipeline().getBuffer(this.prefix + key).ttl(this.prefix + key).exec().then((res) => {
+			let [err0, data] = res[0];
+			let [err1, ttl] = res[1];
 			if(err0){
-				return Promise.reject(err0)
+				return Promise.reject(err0);
 			}
 			if(err1){
-				return Promise.reject(err1)
+				return Promise.reject(err1);
 			}
 			if (data) {
 				this.logger.debug(`FOUND ${key}`);
 				try {
-					data = JSON.parse(data);
+					data = this.serializer.deserialize(data);
 				} catch (err) {
 					this.logger.error("Redis result parse error.", err, data);
-					data = null
+					data = null;
 				}
 			}
-			return { data, ttl }
+			return { data, ttl };
 		});
 	}
 
@@ -236,10 +256,10 @@ class RedisCacher extends BaseCacher {
 	 * @memberof RedisCacher
 	 */
 	lock(key, ttl=15000) {
-		key = this.prefix + key + "-lock"
+		key = this.prefix + key + "-lock";
 		return this.redlock.lock(key, ttl).then(lock=>{
-			return ()=>lock.unlock()
-		})
+			return ()=>lock.unlock();
+		});
 	}
 
 	/**
@@ -252,10 +272,10 @@ class RedisCacher extends BaseCacher {
 	 * @memberof RedisCacher
 	 */
 	tryLock(key, ttl=15000) {
-		key = this.prefix + key + "-lock"
+		key = this.prefix + key + "-lock";
 		return this.redlockNonBlocking.lock(key, ttl).then(lock=>{
-			return ()=>lock.unlock()
-		})
+			return ()=>lock.unlock();
+		});
 	}
 
 	_sequentialPromises(elements) {
@@ -264,19 +284,31 @@ class RedisCacher extends BaseCacher {
 		}, Promise.resolve());
 	}
 
-	_scanDel(pattern) {
+	_clusterScanDel(pattern) {
+		const scanDelPromises = [];
+		const nodes = this.client.nodes();
+
+		nodes.forEach(node => {
+			scanDelPromises.push(this._nodeScanDel(node, pattern));
+		});
+
+		return Promise.all(scanDelPromises);
+	}
+
+	_nodeScanDel(node, pattern) {
 		return new Promise((resolve, reject) => {
-			const stream = this.client.scanStream({
+			const stream = node.scanStream({
 				match: pattern,
 				count: 100
 			});
+
 			stream.on("data", (keys = []) => {
 				if (!keys.length) {
 					return;
 				}
 
 				stream.pause();
-				this.client.del(keys)
+				node.del(keys)
 					.then(() => {
 						stream.resume();
 					})
@@ -285,10 +317,28 @@ class RedisCacher extends BaseCacher {
 						return reject(err);
 					});
 			});
+
+			stream.on("error", (err) => {
+				// eslint-disable-next-line no-console
+				console.error("Error occured while deleting keys from node");
+				reject(err);
+			});
+
 			stream.on("end", () => {
+				//			console.log('End deleting keys from node')
 				resolve();
 			});
 		});
+	}
+
+	_scanDel(pattern) {
+		let Redis = require("ioredis");
+
+		if (this.client instanceof Redis.Cluster) {
+			return this._clusterScanDel(pattern);
+		} else {
+			return this._nodeScanDel(this.client, pattern);
+		}
 	}
 }
 
