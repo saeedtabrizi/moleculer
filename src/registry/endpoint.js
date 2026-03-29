@@ -1,15 +1,25 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
 "use strict";
 
 /**
+ * Import types
+ *
+ * @typedef {import("./registry")} Registry
+ * @typedef {import("../service-broker")} ServiceBroker
+ * @typedef {import("./endpoint")} EndpointClass
+ * @typedef {import("./node")} Node
+ */
+
+/**
  * Endpoint class
  *
  * @class Endpoint
+ * @implements {EndpointClass}
  */
 class Endpoint {
 	/**
@@ -30,9 +40,7 @@ class Endpoint {
 		this.state = true;
 	}
 
-	destroy() {
-
-	}
+	destroy() {}
 
 	/**
 	 * Get availability
@@ -44,9 +52,7 @@ class Endpoint {
 		return this.state;
 	}
 
-	update() {
-
-	}
+	update() {}
 }
 
 module.exports = Endpoint;

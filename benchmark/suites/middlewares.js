@@ -1,8 +1,5 @@
 "use strict";
 
-const Promise	= require("bluebird");
-const _ = require("lodash");
-
 const Benchmarkify = require("benchmarkify");
 const benchmark = new Benchmarkify("Middleware benchmark").printHeader();
 
@@ -10,7 +7,7 @@ const ServiceBroker = require("../../src/service-broker");
 
 const bench = benchmark.createSuite("Middleware test");
 
-(function() {
+(function () {
 	const broker = new ServiceBroker({ logger: false, internalMiddlewares: false });
 	broker.loadService(__dirname + "/../user.service");
 	broker.start();
@@ -20,7 +17,7 @@ const bench = benchmark.createSuite("Middleware test");
 	});
 })();
 
-(function() {
+(function () {
 	const broker = new ServiceBroker({ logger: false });
 	broker.loadService(__dirname + "/../user.service");
 	broker.start();
@@ -30,13 +27,13 @@ const bench = benchmark.createSuite("Middleware test");
 	});
 })();
 
-(function() {
+(function () {
+	const mw = {
+		localAction: handler => ctx => handler(ctx).then(res => res)
+	};
+
 	// Add middlewares
-	const broker = new ServiceBroker({ logger: false, middlewares: [
-		handler => {
-			return ctx => handler(ctx).then(res => res);
-		}
-	] });
+	const broker = new ServiceBroker({ logger: false, middlewares: [mw] });
 
 	broker.loadService(__dirname + "/../user.service");
 	broker.start();
@@ -46,9 +43,9 @@ const bench = benchmark.createSuite("Middleware test");
 	});
 })();
 
-(function() {
-	const mw = handler => {
-		return ctx => handler(ctx).then(res => res);
+(function () {
+	const mw = {
+		localAction: handler => ctx => handler(ctx).then(res => res)
 	};
 
 	// Add 10 middlewares

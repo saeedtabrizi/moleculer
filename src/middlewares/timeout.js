@@ -1,48 +1,79 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2025 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
 "use strict";
 
-const Promise = require("bluebird");
-const { RequestTimeoutError } = require("../errors");
+const { TimeoutError, RequestTimeoutError } = require("../errors");
+const { Stream } = require("stream");
+const { METRIC } = require("../metrics");
 
-function wrapTimeoutMiddleware(handler) {
-	return function timeoutMiddleware(ctx) {
+module.exports = function (broker) {
+	function wrapTimeoutMiddleware(handler, action) {
+		const actionTimeout = action.timeout;
+		const actionName = action.name;
+		const service = action.service ? action.service.fullName : null;
 
-		// Load opts with default values
-		if (ctx.options.timeout == null && this.options.requestTimeout)
-			ctx.options.timeout = this.options.requestTimeout || 0;
+		return function timeoutMiddleware(ctx) {
+			// Load opts with default values
+			if (ctx.options.timeout == null) {
+				if (actionTimeout != null) ctx.options.timeout = actionTimeout;
+				else ctx.options.timeout = broker.options.requestTimeout;
+			}
 
-		if (ctx.options.timeout > 0 && !ctx.startHrTime) {
-			// For distributed timeout calculation need to be set
-			ctx.startHrTime = process.hrtime();
-		}
+			if (ctx.options.timeout > 0 && !ctx.startHrTime) {
+				// For distributed timeout calculation need to be set
+				ctx.startHrTime = process.hrtime();
+			}
 
-		// Call the handler
-		const p = handler(ctx);
-		if (ctx.options.timeout > 0 && p.timeout) {
-			return p.timeout(ctx.options.timeout)
-				.catch(err => {
-					if (err instanceof Promise.TimeoutError) {
-						const actionName = ctx.action.name;
+			// Call the handler
+			const p = handler(ctx);
+			if (ctx.options.timeout > 0 && p.timeout) {
+				return p.timeout(ctx.options.timeout).catch(err => {
+					if (err instanceof TimeoutError) {
 						const nodeID = ctx.nodeID;
-						this.logger.warn(`Request '${actionName}' is timed out.`, { requestID: ctx.requestID, nodeID, timeout: ctx.options.timeout });
+						this.logger.warn(`Request '${actionName}' is timed out.`, {
+							requestID: ctx.requestID,
+							nodeID,
+							timeout: ctx.options.timeout
+						});
+
+						if (ctx.params instanceof Stream) {
+							ctx.params.emit("moleculer-timeout-middleware", ctx.options.timeout);
+						}
+
 						err = new RequestTimeoutError({ action: actionName, nodeID });
+
+						broker.metrics.increment(METRIC.MOLECULER_REQUEST_TIMEOUT_TOTAL, {
+							service,
+							action: actionName
+						});
 					}
-					return this.Promise.reject(err);
+					throw err;
 				});
-		}
+			}
 
-		return p;
+			return p;
+		}.bind(this);
+	}
 
-	}.bind(this);
-}
-
-module.exports = function() {
 	return {
+		name: "Timeout",
+
+		created(broker) {
+			if (broker.isMetricsEnabled()) {
+				broker.metrics.register({
+					name: METRIC.MOLECULER_REQUEST_TIMEOUT_TOTAL,
+					type: METRIC.TYPE_COUNTER,
+					labelNames: ["service", "action"],
+					description: "Number of timed out requests",
+					rate: true
+				});
+			}
+		},
+
 		localAction: wrapTimeoutMiddleware,
 		remoteAction: wrapTimeoutMiddleware
 	};

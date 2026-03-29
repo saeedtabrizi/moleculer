@@ -14,8 +14,13 @@
 */
 
 module.exports = {
-	namespace: "",
+	namespace: "bbb",
 	logger: true,
-	logLevel: "info",
-	transporter: "TCP"
+	logLevel: "debug",
+	//transporter: "TCP"
+	hotReload: true,
+
+	created(broker) {
+		console.log("myVar", broker.options.myVar);
+	}
 };

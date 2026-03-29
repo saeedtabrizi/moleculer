@@ -1,33 +1,60 @@
-/* eslint-disable no-console */
-
 "use strict";
 
-let ServiceBroker = require("../src/service-broker");
-let Transporters = require("../src/transporters");
+const fs = require("fs");
+//const Promise = require("bluebird");
+
+const ServiceBroker = require("../src/service-broker");
+const Transporters = require("../src/transporters");
+const Middlewares = require("../src/middlewares");
+
+const { AsyncLocalStorage } = require("async_hooks");
+
+const asyncLocalStorage = new AsyncLocalStorage();
+
+const AsyncLocalStorageMiddleware = {
+	localAction(handler) {
+		return ctx => asyncLocalStorage.run(ctx, () => handler(ctx));
+	}
+};
+/*
+const async_hooks = require("async_hooks");
+const hook = async_hooks.createHook({
+	init(asyncId, type, triggerAsyncId, resource) { },
+	before(asyncId) { },
+	after(asyncId) { },
+	destroy(asyncId) { },
+	promiseResolve(asyncId) { },
+});
+hook.enable();
+*/
+
+const someData = JSON.parse(fs.readFileSync("./benchmark/data/10k.json", "utf8"));
 
 function createBrokers(Transporter, opts) {
-	let b1 = new ServiceBroker({
-		transporter: new Transporter(opts),
-		//requestTimeout: 0,
-		//logger: console,
-		//logLevel: "debug",
+	const b1 = new ServiceBroker({
 		nodeID: "node-1",
+		logger: true,
+		transporter: new Transporter(opts),
+		//internalMiddlewares: false,
+		middlewares: [
+			//AsyncLocalStorageMiddleware
+			//Middlewares.Transmit.Encryption("moleculer"),
+			//Middlewares.Transmit.Compression(),
+		]
+		//Promise
 	});
 
-	let b2 = new ServiceBroker({
-		transporter: new Transporter(opts),
-		// cacher: "memory",
-		// requestTimeout: 1000,
-		// retryPolicy: {
-		// 	enabled: true
-		// },
-		// circuitBreaker: {
-		// 	enabled: true
-		// },
-		// logger: console,
-		// logLevel: "debug",
-		//metrics: true,
+	const b2 = new ServiceBroker({
 		nodeID: "node-2",
+		logger: true,
+		transporter: new Transporter(opts),
+		//internalMiddlewares: false,
+		middlewares: [
+			//AsyncLocalStorageMiddleware
+			//Middlewares.Transmit.Encryption("moleculer"),
+			//Middlewares.Transmit.Compression(),
+		]
+		//Promise
 	});
 
 	b2.createService({
@@ -36,73 +63,34 @@ function createBrokers(Transporter, opts) {
 			reply(ctx) {
 				return ctx.params;
 			},
-			get: {
-				cache: {
-					keys: ["id"]
-				},
-				handler() {
-					return {
-						name: "User"
-					};
-				}
+			big() {
+				return someData;
 			}
 		}
 	});
 
-	let b3 = new ServiceBroker({
-		transporter: new Transporter(opts),
-		//cacher: "memory",
-		//requestTimeout: 0,
-		//logger: console,
-		//logLevel: "debug",
-		nodeID: "node-3"
-	});
-
-	b3.createService({
-		name: "echo",
-		actions: {
-			reply(ctx) {
-				return ctx.params;
-			},
-			get: {
-				cache: {
-					keys: ["id"]
-				},
-				handler() {
-					return {
-						name: "User"
-					};
-				}
-			}
-		}
-	});
-
-	return Promise.all([
-		b1.start(),
-		b2.start(),
-		//b3.start(),
-	]).then(() => [b1, b2/*, b3*/]);
+	return b1.Promise.all([b1.start(), b2.start()]).then(() => [b1, b2]);
 }
 
-createBrokers(Transporters.Fake).then(([b1, b2]) => {
-
+createBrokers(Transporters.NATS).then(([b1, b2]) => {
 	let count = 0;
 	function doRequest() {
 		count++;
-		return b2.call("echo.reply", { a: count }).then(res => {
-		//return b2.call("echo.get", { id: 5 }).then(res => {
-			if (count % 10000) {
-				// Fast cycle
-				doRequest();
-			} else {
-				// Slow cycle
-				setImmediate(() => doRequest());
-			}
-			return res;
-
-		}).catch(err => {
-			throw err;
-		});
+		return b1
+			.call("echo.reply", { a: count })
+			.then(res => {
+				if (count % 10000) {
+					// Fast cycle
+					doRequest();
+				} else {
+					// Slow cycle
+					setImmediate(() => doRequest());
+				}
+				return res;
+			})
+			.catch(err => {
+				throw err;
+			});
 	}
 
 	setTimeout(() => {
@@ -110,13 +98,30 @@ createBrokers(Transporters.Fake).then(([b1, b2]) => {
 
 		setInterval(() => {
 			let rps = count / ((Date.now() - startTime) / 1000);
-			console.log("RPS:", rps.toLocaleString("hu-HU", {maximumFractionDigits: 0}), "req/s");
+			console.log("RPS:", rps.toLocaleString("hu-HU", { maximumFractionDigits: 0 }), "req/s");
 			count = 0;
 			startTime = Date.now();
 		}, 1000);
 
 		b1.waitForServices(["echo"]).then(() => doRequest());
-
 	}, 1000);
-
 });
+
+/*
+Local calls
+============
+
+No async:  			1 523 904 req/s
+AsyncLocalStorage: 	  185 005 req/s
+Async hooks:		  108 803 req/s
+
+
+Remote calls
+=============
+
+No async: 			   57 197 req/s
+AsyncLocalStorage:	   28 791 req/s
+Async hooks:		   20 790 req/s
+
+
+*/

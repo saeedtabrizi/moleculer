@@ -1,5 +1,3 @@
-/* eslint-disable no-console */
-
 let nc1 = require("nats").connect();
 let nc2 = require("nats").connect();
 
@@ -39,10 +37,9 @@ nc1.on("connect", function () {
 				}
 			}
 		});
-
 	};
 
-	let work2 = function() {
+	let work2 = function () {
 		let received = 0;
 		let start = new Date();
 
@@ -51,7 +48,7 @@ nc1.on("connect", function () {
 		});
 
 		nc1.flush(() => {
-			let doWork = function() {
+			let doWork = function () {
 				nc2.publish("ping", "ok");
 			};
 
@@ -85,7 +82,7 @@ nc1.on("connect", function () {
 		// Make sure sub is registered
 		nc1.flush(function () {
 			for (let i = 0; i < loop; i++) {
-				nc2.request("test", "ok", {max:1}, () => {
+				nc2.request("test", "ok", { max: 1 }, () => {
 					received += 1;
 
 					if (received % hash === 0) {
@@ -106,12 +103,9 @@ nc1.on("connect", function () {
 				}
 			}
 		});
-
 	};
 
 	work1();
 	//work2();
 	//work3();
-
-
 });

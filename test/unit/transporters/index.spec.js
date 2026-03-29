@@ -1,15 +1,13 @@
-const { MoleculerError } = require("../../../src/errors");
+const { BrokerOptionsError } = require("../../../src/errors");
 const Transporters = require("../../../src/transporters");
 
 describe("Test Transporter resolver", () => {
-
 	it("should resolve null from undefined", () => {
 		let trans = Transporters.resolve();
 		expect(trans).toBeNull();
 	});
 
 	describe("Resolve NATS transporter", () => {
-
 		it("should resolve NATSTransporter from connection string", () => {
 			let trans = Transporters.resolve("nats://localhost:4222");
 			expect(trans).toBeInstanceOf(Transporters.NATS);
@@ -24,12 +22,15 @@ describe("Test Transporter resolver", () => {
 			let options = { url: "nats://localhost:4222" };
 			let trans = Transporters.resolve({ options });
 			expect(trans).toBeInstanceOf(Transporters.NATS);
-			expect(trans.opts).toEqual({ "maxReconnectAttempts": -1, "preserveBuffers": true, "url": "nats://localhost:4222" });
+			expect(trans.opts).toEqual({
+				maxReconnectAttempts: -1,
+				preserveBuffers: true,
+				url: "nats://localhost:4222"
+			});
 		});
 	});
 
 	describe("Resolve MQTT transporter", () => {
-
 		it("should resolve MQTTTransporter from connection string", () => {
 			let trans = Transporters.resolve("mqtt://localhost");
 			expect(trans).toBeInstanceOf(Transporters.MQTT);
@@ -54,7 +55,6 @@ describe("Test Transporter resolver", () => {
 	});
 
 	describe("Resolve Redis transporter", () => {
-
 		it("should resolve RedisTransporter from connection string", () => {
 			let trans = Transporters.resolve("redis://localhost");
 			expect(trans).toBeInstanceOf(Transporters.Redis);
@@ -79,7 +79,6 @@ describe("Test Transporter resolver", () => {
 	});
 
 	describe("Resolve AMQP transporter", () => {
-
 		it("should resolve AMQPTransporter from class name", () => {
 			let trans = Transporters.resolve("amqp");
 			expect(trans).toBeInstanceOf(Transporters.AMQP);
@@ -108,91 +107,57 @@ describe("Test Transporter resolver", () => {
 				messageOptions: {},
 				queueOptions: {},
 				consumeOptions: {},
-				autoDeleteQueues: -1
+				autoDeleteQueues: 120000
 			});
 		});
 	});
 
 	describe("Resolve Kafka transporter", () => {
-
 		it("should resolve KafkaTransporter from connection string", () => {
 			let trans = Transporters.resolve("kafka");
 			expect(trans).toBeInstanceOf(Transporters.Kafka);
 		});
 
 		it("should resolve KafkaTransporter from connection string", () => {
-			let trans = Transporters.resolve("kafka://localhost:2181");
+			let trans = Transporters.resolve("kafka://localhost:9093");
 			expect(trans).toBeInstanceOf(Transporters.Kafka);
 			expect(trans.opts).toEqual({
-				"host": "localhost:2181",
-				"client": {
-					"noAckBatchOptions": undefined,
-					"sslOptions": undefined,
-					"zkOptions": undefined
-				},
-				"consumer": {},
-				"customPartitioner": undefined,
-				"producer": {},
-				"publish": {
-					"attributes": 0,
-					"partition": 0
+				clientId: "moleculer-kafka",
+				bootstrapBrokers: ["localhost:9093"],
+				producer: {},
+				consumer: {},
+				admin: {},
+				publish: {},
+				publishMessage: {
+					partition: 0
 				}
 			});
 		});
 
 		it("should resolve KafkaTransporter from obj", () => {
 			let options = {
-				host: "localhost:2181",
-				publish: {
+				bootstrapBrokers: ["localhost:9093"],
+				publishMessage: {
 					partition: 2
 				}
 			};
 			let trans = Transporters.resolve({ type: "Kafka", options });
 			expect(trans).toBeInstanceOf(Transporters.Kafka);
 			expect(trans.opts).toEqual({
-				"host": "localhost:2181",
-				"client": {
-					"noAckBatchOptions": undefined,
-					"sslOptions": undefined,
-					"zkOptions": undefined
-				},
-				"consumer": {},
-				"customPartitioner": undefined,
-				"producer": {},
-				"publish": {
-					"attributes": 0,
-					"partition": 2
+				clientId: "moleculer-kafka",
+				bootstrapBrokers: ["localhost:9093"],
+				producer: {},
+				consumer: {},
+				admin: {},
+				publish: {},
+				publishMessage: {
+					partition: 2
 				}
 			});
 		});
 	});
 
-	describe("Resolve NATS Streaming transporter", () => {
-
-		it("should resolve NatsStreamingTransporter from connection string", () => {
-			let trans = Transporters.resolve("stan://localhost:4222");
-			expect(trans).toBeInstanceOf(Transporters.STAN);
-		});
-
-		it("should resolve NatsStreamingTransporter from string", () => {
-			let trans = Transporters.resolve("STAN");
-			expect(trans).toBeInstanceOf(Transporters.STAN);
-		});
-
-		it("should resolve NatsStreamingTransporter from obj without type", () => {
-			let options = { url: "stan://localhost:4222" };
-			let trans = Transporters.resolve({ type: "STAN", options });
-			expect(trans).toBeInstanceOf(Transporters.STAN);
-			expect(trans.opts).toEqual({
-				"clusterID": "test-cluster",
-				"preserveBuffers": true,
-				"url": "stan://localhost:4222"
-			});
-		});
-	});
-
 	describe("Resolve TCP transporter", () => {
-
 		it("should resolve TcpTransporter from connection string", () => {
 			let trans = Transporters.resolve("tcp://192.168.0.100:6000");
 			expect(trans).toBeInstanceOf(Transporters.TCP);
@@ -214,34 +179,52 @@ describe("Test Transporter resolver", () => {
 			let trans = Transporters.resolve({ type: "TCP", options });
 			expect(trans).toBeInstanceOf(Transporters.TCP);
 			expect(trans.opts).toEqual({
-				"gossipPeriod": 2,
-				"maxConnections": 32,
-				"maxPacketSize": 1048576,
-				"port": 1234,
-				"udpBindAddress": "192.168.0.100",
-				"udpBroadcast": true,
-				"udpDiscovery": true,
-				"udpMaxDiscovery": 0,
-				"udpMulticast": "239.0.0.0",
-				"udpMulticastTTL": 1,
-				"udpPeriod": 5,
-				"udpPort": 4445,
-				"udpReuseAddr": true,
-				"urls": null,
-				"useHostname": true
+				gossipPeriod: 2,
+				maxConnections: 32,
+				maxPacketSize: 1048576,
+				port: 1234,
+				udpBindAddress: "192.168.0.100",
+				udpBroadcast: true,
+				udpDiscovery: true,
+				udpMaxDiscovery: 0,
+				udpMulticast: "239.0.0.0",
+				udpMulticastTTL: 1,
+				udpPeriod: 5,
+				udpPort: 4445,
+				udpReuseAddr: true,
+				urls: null,
+				useHostname: true
 			});
 		});
 
 		it("should throw error if type if not correct", () => {
 			expect(() => {
 				Transporters.resolve("xyz");
-			}).toThrowError(MoleculerError);
+			}).toThrowError(BrokerOptionsError);
 
 			expect(() => {
 				Transporters.resolve({ type: "xyz" });
-			}).toThrowError(MoleculerError);
+			}).toThrowError(BrokerOptionsError);
 		});
+	});
+});
 
+describe("Test Transporters register", () => {
+	class MyCustom {}
+
+	it("should throw error if type if not correct", () => {
+		expect(() => {
+			Transporters.resolve("MyCustom");
+		}).toThrowError(BrokerOptionsError);
 	});
 
+	it("should register new type", () => {
+		Transporters.register("MyCustom", MyCustom);
+		expect(Transporters.MyCustom).toBe(MyCustom);
+	});
+
+	it("should find the new type", () => {
+		const transporter = Transporters.resolve("MyCustom");
+		expect(transporter).toBeInstanceOf(MyCustom);
+	});
 });

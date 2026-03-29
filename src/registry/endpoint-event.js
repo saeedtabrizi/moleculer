@@ -1,6 +1,6 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
@@ -9,20 +9,31 @@
 const Endpoint = require("./endpoint");
 
 /**
+ * Import types
+ *
+ * @typedef {import("./registry")} Registry
+ * @typedef {import("../service-broker")} ServiceBroker
+ * @typedef {import("./endpoint-event")} EventEndpointClass
+ * @typedef {import("./node")} Node
+ * @typedef {import("../service")} Service
+ * @typedef {import("../service").EventSchema} EventSchema
+ */
+
+/**
  * Endpoint class for events
  *
  * @class EventEndpoint
  * @extends {Endpoint}
+ * @implements {EventEndpointClass}
  */
 class EventEndpoint extends Endpoint {
-
 	/**
 	 * Creates an instance of EventEndpoint.
 	 * @param {Registry} registry
 	 * @param {ServiceBroker} broker
 	 * @param {Node} node
 	 * @param {Service} service
-	 * @param {any} event
+	 * @param {EventSchema} event
 	 * @memberof EventEndpoint
 	 */
 	constructor(registry, broker, node, service, event) {
@@ -35,7 +46,7 @@ class EventEndpoint extends Endpoint {
 	/**
 	 * Update properties
 	 *
-	 * @param {any} event
+	 * @param {EventSchema} event
 	 * @memberof EventEndpoint
 	 */
 	update(event) {

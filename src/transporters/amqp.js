@@ -1,15 +1,22 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
 "use strict";
 
 const url = require("url");
-const Promise		= require("bluebird");
-const Transporter 	= require("./base");
-const { isPromise }	= require("../utils");
+const Transporter = require("./base");
+const { isPromise } = require("../utils");
+const C = require("../constants");
+
+/**
+ * Import types
+ *
+ * @typedef {import("./amqp")} AmqpTransporterClass
+ * @typedef {import("./amqp").AmqpTransporterOptions} AmqpTransporterOptions
+ */
 
 const {
 	PACKET_REQUEST,
@@ -21,7 +28,7 @@ const {
 	PACKET_DISCONNECT,
 	PACKET_HEARTBEAT,
 	PACKET_PING,
-	PACKET_PONG,
+	PACKET_PONG
 } = require("../packets");
 
 /**
@@ -35,50 +42,48 @@ const {
  *
  * @class AmqpTransporter
  * @extends {Transporter}
+ * @implements {AmqpTransporterClass}
  */
 class AmqpTransporter extends Transporter {
-
 	/**
 	 * Creates an instance of AmqpTransporter.
 	 *
-	 * @param {any} opts
+	 * @param {string|AmqpTransporterOptions?} opts
 	 *
 	 * @memberof AmqpTransporter
 	 */
 	constructor(opts) {
-		if (typeof opts === "string")
-			opts = { url: opts };
-		else if (opts == null)
-			opts = {};
+		if (typeof opts === "string") opts = { url: opts };
+		else if (opts == null) opts = {};
 
 		// Number of requests a broker will handle concurrently
-		if (typeof opts.prefetch !== "number")
-			opts.prefetch = 1;
+		if (typeof opts.prefetch !== "number") opts.prefetch = 1;
 
 		// Number of milliseconds before an event expires
-		if (typeof opts.eventTimeToLive !== "number")
-			opts.eventTimeToLive = null;
+		if (typeof opts.eventTimeToLive !== "number") opts.eventTimeToLive = null;
 
-		if (typeof opts.heartbeatTimeToLive !== "number")
-			opts.heartbeatTimeToLive = null;
+		if (typeof opts.heartbeatTimeToLive !== "number") opts.heartbeatTimeToLive = null;
 
-		if (typeof opts.queueOptions !== "object")
-			opts.queueOptions = {};
+		if (typeof opts.queueOptions !== "object") opts.queueOptions = {};
 
-		if (typeof opts.exchangeOptions !== "object")
-			opts.exchangeOptions = {};
+		if (typeof opts.exchangeOptions !== "object") opts.exchangeOptions = {};
 
-		if (typeof opts.messageOptions !== "object")
-			opts.messageOptions = {};
+		if (typeof opts.messageOptions !== "object") opts.messageOptions = {};
 
-		if (typeof opts.consumeOptions !== "object")
-			opts.consumeOptions = {};
+		if (typeof opts.consumeOptions !== "object") opts.consumeOptions = {};
+
+		// The default behavior is to delete the queues after they haven't had any
+		// connected consumers for 2 minutes.
+		const autoDeleteQueuesAfterDefault = 2 * 60 * 1000;
 
 		opts.autoDeleteQueues =
-			opts.autoDeleteQueues === true ? 2*60*1000 :
-				typeof opts.autoDeleteQueues === "number" ? opts.autoDeleteQueues :
-					opts.autoDeleteQueues === false ? -1 :
-						-1; // Eventually we could change default
+			opts.autoDeleteQueues === true
+				? autoDeleteQueuesAfterDefault
+				: typeof opts.autoDeleteQueues === "number"
+					? opts.autoDeleteQueues
+					: opts.autoDeleteQueues === false
+						? -1
+						: autoDeleteQueuesAfterDefault;
 
 		// Support for multiple URLs (clusters)
 		opts.url = Array.isArray(opts.url)
@@ -96,6 +101,7 @@ class AmqpTransporter extends Transporter {
 
 		this.channelDisconnecting = false;
 		this.connectionDisconnecting = false;
+		this.connectionCount = 0;
 	}
 
 	/**
@@ -104,58 +110,68 @@ class AmqpTransporter extends Transporter {
 	 * @memberof AmqpTransporter
 	 */
 	connect(errorCallback) {
-		return new Promise((_resolve, _reject) => {
+		return new this.broker.Promise((_resolve, _reject) => {
 			let _isResolved = false;
 			const resolve = () => {
 				_isResolved = true;
 				_resolve();
 			};
-			const reject = (err) => {
+			const reject = err => {
 				_reject(err);
-				if (_isResolved) errorCallback(err);
+
+				// Returning callback to avoid race condition in the tests
+				if (_isResolved) return errorCallback(err);
 			};
 
 			let amqp;
 			try {
 				amqp = require("amqplib");
-			} catch(err) {
+			} catch (err) {
 				/* istanbul ignore next */
-				this.broker.fatal("The 'amqplib' package is missing. Please install it with 'npm install amqplib --save' command.", err, true);
+				this.broker.fatal(
+					"The 'amqplib' package is missing. Please install it with 'npm install amqplib --save' command.",
+					err,
+					true
+				);
 			}
 
 			// Pick url
-			this.connectAttempt = (this.connectAttempt||0)+1;
-			const urlIndex = (this.connectAttempt-1) % this.opts.url.length;
+			this.connectAttempt = (this.connectAttempt || 0) + 1;
+			const urlIndex = (this.connectAttempt - 1) % this.opts.url.length;
 			const uri = this.opts.url[urlIndex];
 			const urlParsed = url.parse(uri);
 
-			amqp.connect(uri, Object.assign({},
-				(this.opts.socketOptions || {}),
-				{ servername: urlParsed.hostname }
-			))
+			amqp.connect(
+				uri,
+				Object.assign({}, this.opts.socketOptions || {}, { servername: urlParsed.hostname })
+			)
 				.then(connection => {
 					this.connection = connection;
 					this.logger.info("AMQP is connected.");
 
 					/* istanbul ignore next*/
 					connection
-						.on("error", (err) => {
+						.on("error", err => {
 							// No need to reject here since close event will be fired after
 							// if not connected at all connection promise will be rejected
-							// this.connected = false;
-							// reject(err);
 							this.logger.error("AMQP connection error.", err);
+
+							this.broker.broadcastLocal("$transporter.error", {
+								error: err,
+								module: "transporter",
+								type: C.FAILED_CONNECTION_ERROR
+							});
 						})
-						.on("close", (err) => {
+						.on("close", err => {
 							this.connected = false;
 							if (!this.connectionDisconnecting) {
 								this.logger.error("AMQP connection is closed.");
-								reject(err);
+								return reject(err);
 							} else {
 								this.logger.info("AMQP connection is closed gracefully.");
 							}
 						})
-						.on("blocked", (reason) => {
+						.on("blocked", reason => {
 							this.logger.warn("AMQP connection is blocked.", reason);
 						})
 						.on("unblocked", () => {
@@ -164,7 +180,7 @@ class AmqpTransporter extends Transporter {
 
 					connection
 						.createChannel()
-						.then((channel) => {
+						.then(channel => {
 							this.channel = channel;
 							this.logger.info("AMQP channel is created.");
 
@@ -175,41 +191,51 @@ class AmqpTransporter extends Transporter {
 								.on("close", () => {
 									this.channel = null;
 									// No need to reject here since close event on connection will handle
-									// this.connected = false;
-									// reject();
 									if (!this.channelDisconnecting)
 										this.logger.warn("AMQP channel is closed.");
-									else
-										this.logger.info("AMQP channel is closed gracefully.");
+									else this.logger.info("AMQP channel is closed gracefully.");
 								})
-								.on("error", (err) => {
+								.on("error", err => {
 									// No need to reject here since close event will be fired after
-									// this.connected = false;
-									// reject(err);
 									this.logger.error("AMQP channel error.", err);
+
+									this.broker.broadcastLocal("$transporter.error", {
+										error: err,
+										module: "transporter",
+										type: C.FAILED_CHANNEL_ERROR
+									});
 								})
 								.on("drain", () => {
 									this.logger.info("AMQP channel is drained.");
 								})
-								.on("return", (msg) => {
+								.on("return", msg => {
 									this.logger.warn("AMQP channel returned a message.", msg);
 								});
 
-							return this.onConnected();
+							this.connectionCount += 1;
+							const isReconnect = this.connectionCount > 1;
+
+							// HACK: We have to do this because subscriptions aren't persistent,
+							// and only balanced subscriptions happen automatically on reconnects
+							const p = isReconnect
+								? this.transit.makeSubscriptions()
+								: this.broker.Promise.resolve();
+							return p.then(() => this.onConnected(isReconnect));
 						})
 						.then(resolve)
-						.catch((err) => {
+						.catch(err => {
 							/* istanbul ignore next*/
 							this.logger.error("AMQP failed to create channel.");
 							this.connected = false;
-							reject(err);
+							return reject(err);
 						});
+					return null;
 				})
-				.catch((err) => {
+				.catch(err => {
 					/* istanbul ignore next*/
 					this.logger.warn("AMQP failed to connect!");
 					this.connected = false;
-					reject(err);
+					return reject(err);
 				});
 		});
 	}
@@ -225,8 +251,12 @@ class AmqpTransporter extends Transporter {
 	 * Queues and Exchanges are not be deleted since they could contain important messages.
 	 */
 	disconnect() {
+		this.connectionCount = 0;
+
 		if (this.connection && this.channel && this.bindings) {
-			return Promise.all(this.bindings.map(binding => this.channel.unbindQueue(...binding)))
+			return this.broker.Promise.all(
+				this.bindings.map(binding => this.channel.unbindQueue(...binding))
+			)
 				.then(() => {
 					this.channelDisconnecting = this.transit.disconnecting;
 					this.connectionDisconnecting = this.transit.disconnecting;
@@ -246,34 +276,34 @@ class AmqpTransporter extends Transporter {
 	 * Get assertQueue options by packet type.
 	 *
 	 * @param {String} packetType
+	 * @param {boolean=} balancedQueue
 	 *
 	 * @memberof AmqpTransporter
 	 */
 	_getQueueOptions(packetType, balancedQueue) {
+		/** @type {Record<string, any>} */
 		let packetOptions;
-		switch(packetType) {
+		switch (packetType) {
 			// Requests and responses don't expire.
 			case PACKET_REQUEST:
-				packetOptions = this.opts.autoDeleteQueues >= 0 && !balancedQueue
-					? { expires: this.opts.autoDeleteQueues }
-					: {};
+				packetOptions =
+					this.opts.autoDeleteQueues >= 0 && !balancedQueue
+						? { expires: this.opts.autoDeleteQueues }
+						: {};
 				break;
 			case PACKET_RESPONSE:
-				packetOptions = this.opts.autoDeleteQueues >= 0
-					? { expires: this.opts.autoDeleteQueues }
-					: {};
+				packetOptions =
+					this.opts.autoDeleteQueues >= 0 ? { expires: this.opts.autoDeleteQueues } : {};
 				break;
 
 			// Consumers can decide how long events live
 			// Load-balanced/grouped events
 			case PACKET_EVENT + "LB":
 			case PACKET_EVENT:
-				packetOptions = this.opts.autoDeleteQueues >= 0
-					? { expires: this.opts.autoDeleteQueues }
-					: {};
+				packetOptions =
+					this.opts.autoDeleteQueues >= 0 ? { expires: this.opts.autoDeleteQueues } : {};
 				// If eventTimeToLive is specified, add to options.
-				if (this.opts.eventTimeToLive)
-					packetOptions.messageTtl = this.opts.eventTimeToLive;
+				if (this.opts.eventTimeToLive) packetOptions.messageTtl = this.opts.eventTimeToLive;
 				break;
 
 			// Packet types meant for internal use
@@ -300,28 +330,27 @@ class AmqpTransporter extends Transporter {
 	 * Build a function to handle requests.
 	 *
 	 * @param {String} cmd
-	 * @param {Boolean} needAck
+	 * @param {Boolean=} needAck
+	 * @returns {(msg: any) => void | Promise<void>}
 	 *
 	 * @memberof AmqpTransporter
 	 */
 	_consumeCB(cmd, needAck = false) {
-		return (msg) => {
-			const result = this.incomingMessage(cmd, msg.content);
+		return msg => {
+			const result = this.receive(cmd, msg.content);
 
 			// If a promise is returned, acknowledge the message after it has resolved.
 			// This means that if a worker dies after receiving a message but before responding, the
 			// message won't be lost and it can be retried.
-			if(needAck) {
+			if (needAck) {
 				if (isPromise(result)) {
 					return result
 						.then(() => {
-							if (this.channel)
-								this.channel.ack(msg);
+							if (this.channel) this.channel.ack(msg);
 						})
 						.catch(err => {
 							this.logger.error("Message handling error.", err);
-							if (this.channel)
-								this.channel.nack(msg);
+							if (this.channel) this.channel.nack(msg);
 						});
 				} else if (this.channel) {
 					this.channel.ack(msg);
@@ -331,7 +360,6 @@ class AmqpTransporter extends Transporter {
 			return result;
 		};
 	}
-
 
 	/**
 	 * Subscribe to a command
@@ -372,13 +400,15 @@ class AmqpTransporter extends Transporter {
 		if (nodeID != null) {
 			const needAck = [PACKET_REQUEST].indexOf(cmd) !== -1;
 
-			return this.channel.assertQueue(topic, this._getQueueOptions(cmd))
-				.then(() => this.channel.consume(
-					topic,
-					this._consumeCB(cmd, needAck),
-					Object.assign({ noAck: !needAck }, this.opts.consumeOptions)
-				));
-
+			return this.channel
+				.assertQueue(topic, this._getQueueOptions(cmd))
+				.then(() =>
+					this.channel.consume(
+						topic,
+						this._consumeCB(cmd, needAck),
+						Object.assign({ noAck: !needAck }, this.opts.consumeOptions)
+					)
+				);
 		} else {
 			// Create a queue specific to this nodeID so that this node can receive broadcasted messages.
 			const queueName = `${this.prefix}.${cmd}.${this.nodeID}`;
@@ -387,18 +417,19 @@ class AmqpTransporter extends Transporter {
 			const bindingArgs = [queueName, topic, ""];
 			this.bindings.push(bindingArgs);
 
-			return Promise.all([
+			return this.broker.Promise.all([
 				this.channel.assertExchange(topic, "fanout", this.opts.exchangeOptions),
-				this.channel.assertQueue(queueName, this._getQueueOptions(cmd)),
-			])
-				.then(() => Promise.all([
+				this.channel.assertQueue(queueName, this._getQueueOptions(cmd))
+			]).then(() =>
+				this.broker.Promise.all([
 					this.channel.bindQueue(...bindingArgs),
 					this.channel.consume(
 						queueName,
 						this._consumeCB(cmd),
 						Object.assign({ noAck: true }, this.opts.consumeOptions)
 					)
-				]));
+				])
+			);
 		}
 	}
 
@@ -409,13 +440,18 @@ class AmqpTransporter extends Transporter {
 	 * @memberof AmqpTransporter
 	 */
 	subscribeBalancedRequest(action) {
+		if (!this.channel) return;
+
 		const queue = `${this.prefix}.${PACKET_REQUEST}B.${action}`;
-		return this.channel.assertQueue(queue, this._getQueueOptions(PACKET_REQUEST, true))
-			.then(() => this.channel.consume(
-				queue,
-				this._consumeCB(PACKET_REQUEST, true),
-				this.opts.consumeOptions
-			));
+		return this.channel
+			.assertQueue(queue, this._getQueueOptions(PACKET_REQUEST, true))
+			.then(() =>
+				this.channel.consume(
+					queue,
+					this._consumeCB(PACKET_REQUEST, true),
+					this.opts.consumeOptions
+				)
+			);
 	}
 
 	/**
@@ -426,78 +462,40 @@ class AmqpTransporter extends Transporter {
 	 * @memberof AmqpTransporter
 	 */
 	subscribeBalancedEvent(event, group) {
+		if (!this.channel) return;
+
 		const queue = `${this.prefix}.${PACKET_EVENT}B.${group}.${event}`;
-		return this.channel.assertQueue(queue, this._getQueueOptions(PACKET_EVENT + "LB", true))
-			.then(() => this.channel.consume(
-				queue,
-				this._consumeCB(PACKET_EVENT, true),
-				this.opts.consumeOptions
-			));
+		return this.channel
+			.assertQueue(queue, this._getQueueOptions(PACKET_EVENT + "LB", true))
+			.then(() =>
+				this.channel.consume(
+					queue,
+					this._consumeCB(PACKET_EVENT, true),
+					this.opts.consumeOptions
+				)
+			);
 	}
 
 	/**
-	 * Publish a packet
+	 * Send data buffer.
 	 *
-	 * @param {Packet} packet
+	 * @param {String} topic
+	 * @param {Buffer} data
+	 * @param {Object} meta
 	 *
-	 * @memberof AmqpTransporter
-	 * @description Send packets to their intended queues / exchanges.
-	 *
-	 * Reasonings documented in the subscribe method.
+	 * @returns {Promise}
 	 */
-	publish(packet) {
+	send(topic, data, { balanced, packet }) {
 		/* istanbul ignore next*/
-		if (!this.channel) return Promise.resolve();
+		if (!this.channel) return this.broker.Promise.resolve();
 
-		let topic = this.getTopicName(packet.type, packet.target);
-		const data = this.serialize(packet);
-
-		this.incStatSent(data.length);
-		if (packet.target != null) {
+		if (packet.target != null || balanced) {
 			this.channel.sendToQueue(topic, data, this.opts.messageOptions);
 		} else {
 			this.channel.publish(topic, "", data, this.opts.messageOptions);
 		}
 
-		return Promise.resolve();
-	}
-
-	/**
-	 * Publish a balanced EVENT packet to a balanced queue
-	 *
-	 * @param {Packet} packet
-	 * @param {String} group
-	 * @returns {Promise}
-	 * @memberof AmqpTransporter
-	 */
-	publishBalancedEvent(packet, group) {
-		/* istanbul ignore next*/
-		if (!this.channel) return Promise.resolve();
-
-		let queue = `${this.prefix}.${PACKET_EVENT}B.${group}.${packet.payload.event}`;
-		const data = this.serialize(packet);
-		this.incStatSent(data.length);
-		this.channel.sendToQueue(queue, data, this.opts.messageOptions);
-		return Promise.resolve();
-	}
-
-	/**
-	 * Publish a balanced REQ packet to a balanced queue
-	 *
-	 * @param {Packet} packet
-	 * @returns {Promise}
-	 * @memberof AmqpTransporter
-	 */
-	publishBalancedRequest(packet) {
-		/* istanbul ignore next*/
-		if (!this.channel) return Promise.resolve();
-
-		const topic = `${this.prefix}.${PACKET_REQUEST}B.${packet.payload.action}`;
-
-		const data = this.serialize(packet);
-		this.incStatSent(data.length);
-		this.channel.sendToQueue(topic, data, this.opts.messageOptions);
-		return Promise.resolve();
+		return this.broker.Promise.resolve();
 	}
 }
 

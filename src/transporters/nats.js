@@ -1,17 +1,21 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
 "use strict";
 
-const Promise		= require("bluebird");
-const Transporter 	= require("./base");
-const {
-	PACKET_REQUEST,
-	PACKET_EVENT,
-} = require("../packets");
+const Transporter = require("./base");
+const { PACKET_REQUEST, PACKET_EVENT } = require("../packets");
+const C = require("../constants");
+
+/**
+ * Import types
+ *
+ * @typedef {import("./nats")} NatsTransporterClass
+ * @typedef {import("./nats").NatsTransporterOptions} NatsTransporterOptions
+ */
 
 /**
  * Transporter for NATS
@@ -20,31 +24,27 @@ const {
  *
  * @class NatsTransporter
  * @extends {Transporter}
+ * @implements {NatsTransporterClass}
  */
 class NatsTransporter extends Transporter {
-
 	/**
 	 * Creates an instance of NatsTransporter.
 	 *
-	 * @param {any} opts
+	 * @param {string|NatsTransporterOptions} opts
 	 *
 	 * @memberof NatsTransporter
 	 */
 	constructor(opts) {
-		if (typeof opts == "string")
-			opts = { url: opts };
+		if (typeof opts == "string") opts = { url: opts };
 
 		super(opts);
 
-		if (!this.opts)
-			this.opts = {};
+		if (!this.opts) this.opts = {};
 
 		// Use the 'preserveBuffers' option as true as default
-		if (this.opts.preserveBuffers !== false)
-			this.opts.preserveBuffers = true;
+		if (this.opts.preserveBuffers !== false) this.opts.preserveBuffers = true;
 
-		if (this.opts.maxReconnectAttempts == null)
-			this.opts.maxReconnectAttempts = -1;
+		if (this.opts.maxReconnectAttempts == null) this.opts.maxReconnectAttempts = -1;
 
 		this.hasBuiltInBalancer = true;
 		this.client = null;
@@ -58,58 +58,68 @@ class NatsTransporter extends Transporter {
 	 * @memberof NatsTransporter
 	 */
 	connect() {
-		return new Promise((resolve, reject) => {
-			let Nats;
-			try {
-				Nats = require("nats");
-			} catch(err) {
-				/* istanbul ignore next */
-				this.broker.fatal("The 'nats' package is missing! Please install it with 'npm install nats --save' command.", err, true);
-			}
-			const client = Nats.connect(this.opts);
-			this._client = client; // For tests
+		let Nats;
+		try {
+			Nats = require("nats");
+		} catch (err) {
+			/* istanbul ignore next */
+			this.broker.fatal(
+				"The 'nats' package is missing! Please install it with 'npm install nats --save' command.",
+				err,
+				true
+			);
+		}
 
-			client.on("connect", () => {
+		if (this.opts.url) {
+			Object.assign(
+				this.opts,
+				this.opts.url.split(",").reduce((acc, cur) => {
+					const url = new URL(cur);
+
+					acc.servers = Array.isArray(acc.servers)
+						? acc.servers.concat(url.host)
+						: [url.host];
+					acc.user = acc.user || url.username || undefined;
+					acc.pass = acc.pass || url.password || undefined;
+
+					return acc;
+				}, Object.create(null))
+			);
+		}
+
+		return Nats.connect(this.opts)
+			.then(client => {
 				this.client = client;
+
 				this.logger.info("NATS client is connected.");
-				this.onConnected().then(resolve);
-			});
 
-			/* istanbul ignore next */
-			client.on("reconnect", () => {
-				this.logger.info("NATS client is reconnected.");
-				this.onConnected(true);
-			});
+				(async () => {
+					for await (const s of this.client.status()) {
+						this.logger.debug(`NATS client ${s.type}: ${s.data}`);
+					}
+				})().then();
 
-			/* istanbul ignore next */
-			client.on("reconnecting", () => {
-				this.logger.warn("NATS client is reconnecting...");
-			});
-
-			/* istanbul ignore next */
-			client.on("disconnect", () => {
-				if (this.connected) {
-					this.logger.warn("NATS client is disconnected.");
+				client.closed().then(() => {
 					this.connected = false;
+					this.logger.info("NATS connection closed.");
+				});
+
+				return this.onConnected();
+			})
+			.catch(
+				/* istanbul ignore next */ err => {
+					this.logger.error("NATS error.", err.message);
+					this.logger.debug(err);
+
+					this.broker.broadcastLocal("$transporter.error", {
+						error: err,
+						module: "transporter",
+						type: C.CLIENT_ERROR
+					});
+
+					throw err;
 				}
-			});
-
-			/* istanbul ignore next */
-			client.on("error", e => {
-				this.logger.error("NATS error.", e.message);
-				this.logger.debug(e);
-
-				if (!client.connected)
-					reject(e);
-			});
-
-			/* istanbul ignore next */
-			client.on("close", () => {
-				this.connected = false;
-				// Hint: It won't try reconnecting again, so we kill the process.
-				this.broker.fatal("NATS connection closed.");
-			});
-		});
+			);
 	}
 
 	/**
@@ -119,24 +129,12 @@ class NatsTransporter extends Transporter {
 	 */
 	disconnect() {
 		if (this.client) {
-			this.client.flush(() => {
-				this.client.close();
-				this.client = null;
-			});
+			return this.client
+				.flush()
+				.then(() => this.client.close())
+				.then(() => (this.client = null));
 		}
 	}
-
-	/**
-	 * Reconnect to server after x seconds
-	 *
-	 * @memberof BaseTransporter
-	 */
-	/*reconnectAfterTime() {
-		//this.logger.info("Reconnecting after 5 sec...");
-		setTimeout(() => {
-			this.connect();
-		}, 5 * 1000);
-	}*/
 
 	/**
 	 * Subscribe to a command
@@ -149,22 +147,34 @@ class NatsTransporter extends Transporter {
 	subscribe(cmd, nodeID) {
 		const t = this.getTopicName(cmd, nodeID);
 
-		this.client.subscribe(t, msg => this.incomingMessage(cmd, msg));
+		this.client.subscribe(t, {
+			callback: (err, msg) => {
+				this.receive(cmd, Buffer.from(msg.data));
+			}
+		});
 
-		return Promise.resolve();
+		return this.broker.Promise.resolve();
 	}
 
 	/**
 	 * Subscribe to balanced action commands
 	 *
 	 * @param {String} action
+	 * @returns {Promise<void>}
 	 * @memberof NatsTransporter
 	 */
 	subscribeBalancedRequest(action) {
 		const topic = `${this.prefix}.${PACKET_REQUEST}B.${action}`;
 		const queue = action;
 
-		this.subscriptions.push(this.client.subscribe(topic, { queue }, (msg) => this.incomingMessage(PACKET_REQUEST, msg)));
+		this.subscriptions.push(
+			this.client.subscribe(topic, {
+				queue,
+				callback: (err, msg) => this.receive(PACKET_REQUEST, Buffer.from(msg.data))
+			})
+		);
+
+		return this.broker.Promise.resolve();
 	}
 
 	/**
@@ -172,12 +182,20 @@ class NatsTransporter extends Transporter {
 	 *
 	 * @param {String} event
 	 * @param {String} group
+	 * @returns {Promise<void>}
 	 * @memberof NatsTransporter
 	 */
 	subscribeBalancedEvent(event, group) {
-		const topic = `${this.prefix}.${PACKET_EVENT}B.${group}.${event}`.replace(/\*\*/g, ">");
+		const topic = `${this.prefix}.${PACKET_EVENT}B.${group}.${event}`.replace(/\*\*.*$/g, ">");
 
-		this.subscriptions.push(this.client.subscribe(topic, { queue: group }, (msg) => this.incomingMessage(PACKET_EVENT, msg)));
+		this.subscriptions.push(
+			this.client.subscribe(topic, {
+				queue: group,
+				callback: (err, msg) => this.receive(PACKET_EVENT, Buffer.from(msg.data))
+			})
+		);
+
+		return this.broker.Promise.resolve();
 	}
 
 	/**
@@ -186,75 +204,27 @@ class NatsTransporter extends Transporter {
 	 * @memberof BaseTransporter
 	 */
 	unsubscribeFromBalancedCommands() {
-		return new Promise(resolve => {
-			this.subscriptions.forEach(uid => this.client.unsubscribe(uid));
-			this.subscriptions = [];
+		this.subscriptions.forEach(sub => sub.unsubscribe());
+		this.subscriptions = [];
 
-			this.client.flush(resolve);
-		});
+		return this.client.flush();
 	}
 
 	/**
-	 * Publish a packet
+	 * Send data buffer.
 	 *
-	 * @param {Packet} packet
+	 * @param {String} topic
+	 * @param {Buffer} data
 	 *
-	 * @memberof NatsTransporter
-	 */
-	publish(packet) {
-		/* istanbul ignore next*/
-		if (!this.client) return Promise.resolve();
-
-		return new Promise(resolve => {
-			let topic = this.getTopicName(packet.type, packet.target);
-			const data = this.serialize(packet);
-
-			this.incStatSent(data.length);
-			this.client.publish(topic, data, resolve);
-		});
-	}
-
-	/**
-	 * Publish a balanced EVENT packet to a balanced queue
-	 *
-	 * @param {Packet} packet
-	 * @param {String} group
 	 * @returns {Promise}
-	 * @memberof AmqpTransporter
 	 */
-	publishBalancedEvent(packet, group) {
+	send(topic, data) {
 		/* istanbul ignore next*/
-		if (!this.client) return Promise.resolve();
+		if (!this.client) return this.broker.Promise.resolve();
 
-		return new Promise(resolve => {
-			let topic = `${this.prefix}.${PACKET_EVENT}B.${group}.${packet.payload.event}`;
-			const data = this.serialize(packet);
-
-			this.incStatSent(data.length);
-			this.client.publish(topic, data, resolve);
-		});
+		this.client.publish(topic, data);
+		return this.broker.Promise.resolve();
 	}
-
-	/**
-	 * Publish a balanced REQ packet to a balanced queue
-	 *
-	 * @param {Packet} packet
-	 * @returns {Promise}
-	 * @memberof AmqpTransporter
-	 */
-	publishBalancedRequest(packet) {
-		/* istanbul ignore next*/
-		if (!this.client) return Promise.resolve();
-
-		return new Promise(resolve => {
-			const topic = `${this.prefix}.${PACKET_REQUEST}B.${packet.payload.action}`;
-			const data = this.serialize(packet);
-
-			this.incStatSent(data.length);
-			this.client.publish(topic, data, resolve);
-		});
-	}
-
 }
 
 module.exports = NatsTransporter;

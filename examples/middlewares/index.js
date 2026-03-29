@@ -1,67 +1,61 @@
-/* eslint-disable no-console */
-
 "use strict";
 
 let path = require("path");
-let chalk = require("chalk");
+let kleur = require("kleur");
 
 let ServiceBroker = require("../../src/service-broker");
 
-function middleware1() {
-	return function (handler) {
-
+const middleware1 = {
+	localAction(handler) {
 		return function mw1(ctx) {
-			broker.logger.info(chalk.yellow("mw1 before", ctx.action.name));
+			broker.logger.info(kleur.yellow("      mw1 before", ctx.action.name));
 			return handler(ctx).then(res => {
-				broker.logger.info(chalk.yellow("mw1 after", ctx.action.name));
+				broker.logger.info(kleur.yellow("      mw1 after", ctx.action.name));
 				return res;
 			});
 		};
-
-	};
-}
+	}
+};
 
 // Promise example
-function middleware2() {
-	return function (handler) {
-
+const middleware2 = {
+	localAction(handler) {
 		return function mw2(ctx) {
-			broker.logger.info(chalk.magenta("mw2 before-promise", ctx.action.name));
+			broker.logger.info(kleur.magenta("  mw2 before-promise", ctx.action.name));
 			return new broker.Promise(resolve => {
 				setTimeout(() => {
-					broker.logger.info(chalk.magenta("mw2 before", ctx.action.name));
+					broker.logger.info(kleur.magenta("    mw2 before", ctx.action.name));
 					//resolve("data from mw2");
 					resolve();
 				}, 300);
-			}).then(() => {
-				return handler(ctx);
-			}).then(res => {
-				broker.logger.info(chalk.magenta("mw2 after", ctx.action.name));
-				return res;
-			});
+			})
+				.then(() => {
+					return handler(ctx);
+				})
+				.then(res => {
+					broker.logger.info(kleur.magenta("    mw2 after", ctx.action.name));
+					return res;
+				});
 		};
-	};
-}
+	}
+};
 
 // Async/await example
-function middleware3() {
-	return function mw3(handler) {
-
+const middleware3 = {
+	localAction(handler) {
 		return async function mw3(ctx) {
-			broker.logger.info(chalk.cyan("mw3 before", ctx.action.name));
+			broker.logger.info(kleur.cyan("mw3 before", ctx.action.name));
 			//return broker.Promise.resolve("data from mw3");
 			const res = await handler(ctx);
-			broker.logger.info(chalk.cyan("mw3 after", ctx.action.name));
+			broker.logger.info(kleur.cyan("mw3 after", ctx.action.name));
 			if (res) {
-				if (ctx.action.name == "users.get")
-					delete res.gravatar;
-				if (ctx.action.name == "posts.get")
-					delete res.content;
+				if (ctx.action.name == "users.get") delete res.gravatar;
+				if (ctx.action.name == "posts.get") delete res.content;
 			}
 			return res;
 		};
-	};
-}
+	}
+};
 
 // Create broker
 let broker = new ServiceBroker({
@@ -69,11 +63,7 @@ let broker = new ServiceBroker({
 	logLevel: "info",
 	transporter: null,
 	cacher: true,
-	middlewares: [
-		middleware1(),
-		middleware2(),
-		middleware3()
-	]
+	middlewares: [middleware1, middleware2, middleware3]
 });
 
 /* Execution order
@@ -91,11 +81,11 @@ broker.call
 broker.loadService(path.join(__dirname, "..", "post.service.js"));
 broker.loadService(path.join(__dirname, "..", "user.service.js"));
 broker.start().then(() => {
-
-	return broker.call("posts.get", { id: 3 }).then(res => broker.logger.info(res))
+	return broker
+		.call("posts.get", { id: 3 })
+		.then(res => broker.logger.info(res))
 		.then(() => {
-			console.log(chalk.bold("\n--- NEXT CALL FROM CACHE ---\n"));
+			console.log(kleur.bold("\n--- NEXT CALL FROM CACHE ---\n"));
 			return broker.call("posts.get", { id: 3 }).then(res => broker.logger.info(res));
 		});
-
 });

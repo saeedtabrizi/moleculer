@@ -1,46 +1,72 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2025 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
 "use strict";
 
-const Promise 				= require("bluebird");
-const EventEmitter2 		= require("eventemitter2").EventEmitter2;
-const _ 					= require("lodash");
-const glob 					= require("glob");
-const path 					= require("path");
-const fs 					= require("fs");
+const EventEmitter2 = require("eventemitter2").EventEmitter2;
+const _ = require("lodash");
+const { globSync } = require("glob");
+const path = require("path");
+const { format } = require("util");
 
-const Transit 				= require("./transit");
-const Registry 				= require("./registry");
-const E 					= require("./errors");
-const utils 				= require("./utils");
-const Logger 				= require("./logger");
-const Validator 			= require("./validator");
+const Transit = require("./transit");
+const Registry = require("./registry");
+const E = require("./errors");
+const utils = require("./utils");
+const LoggerFactory = require("./logger-factory");
+const Validators = require("./validators");
+//const AsyncStorage 			= require("./async-storage");
 
-const Cachers 				= require("./cachers");
-const Transporters 			= require("./transporters");
-const Serializers 			= require("./serializers");
-const Middlewares			= require("./middlewares");
-const H 					= require("./health");
-const MiddlewareHandler		= require("./middleware");
-const cpuUsage 				= require("./cpu-usage");
+const Cachers = require("./cachers");
+const Transporters = require("./transporters");
+const Serializers = require("./serializers");
+const Errors = require("./errors");
+const H = require("./health");
+const MiddlewareHandler = require("./middleware");
+const cpuUsage = require("./cpu-usage");
+
+const { MetricRegistry, METRIC } = require("./metrics");
+const { Tracer } = require("./tracing");
+const C = require("./constants");
+
+/**
+ * Import types
+ *
+ * @typedef {import("./context")} Context
+ * @typedef {import("./registry/endpoint-action")} ActionEndpoint
+ * @typedef {import("./service")} Service
+ * @typedef {import("./service").ServiceSchema} ServiceSchema
+ * @typedef {import("./service").ServiceDependency} ServiceDependency
+ * @typedef {import("./service").ActionHandler} ActionHandler
+ * @typedef {import("./service-broker")} ServiceBrokerClass
+ * @typedef {import("./service-broker").BrokerOptions} BrokerOptions
+ * @typedef {import("./service-broker").CallingOptions} CallingOptions
+ * @typedef {import("./service-broker").NodeHealthStatus} NodeHealthStatus
+ * @typedef {import("./service-broker").MCallDefinition} MCallDefinition
+ * @typedef {import("./service-broker").MCallCallingOptions} MCallCallingOptions
+ * @typedef {import("./logger-factory").Logger} Logger
+ * @typedef {import("./registry").NodeRawInfo} NodeRawInfo
+ * @typedef {import("./registry/service-item")} ServiceItem
+ */
 
 /**
  * Default broker options
+ *
+ * @type {BrokerOptions}
  */
 const defaultOptions = {
 	namespace: "",
 	nodeID: null,
 
-	logger: null,
+	logger: true,
 	logLevel: null,
-	logFormatter: "default",
-	logObjectPrinter: null,
 
 	transporter: null, //"TCP",
+
+	errorRegenerator: null,
 
 	requestTimeout: 0 * 1000,
 	retryPolicy: {
@@ -49,23 +75,27 @@ const defaultOptions = {
 		delay: 100,
 		maxDelay: 1000,
 		factor: 2,
+		// @ts-ignore
 		check: err => err && !!err.retryable
 	},
 
+	contextParamsCloning: false,
 	maxCallLevel: 0,
-	heartbeatInterval: 5,
-	heartbeatTimeout: 15,
+	heartbeatInterval: 10,
+	heartbeatTimeout: 30,
 
 	tracking: {
 		enabled: false,
-		shutdownTimeout: 5000,
+		shutdownTimeout: 5000
 	},
 
 	disableBalancer: false,
 
 	registry: {
 		strategy: "RoundRobin",
-		preferLocal: true
+		preferLocal: true,
+		stopDelay: 100,
+		discoverer: "Local"
 	},
 
 	circuitBreaker: {
@@ -74,53 +104,94 @@ const defaultOptions = {
 		windowTime: 60,
 		minRequestCount: 20,
 		halfOpenTime: 10 * 1000,
+		// @ts-ignore
 		check: err => err && err.code >= 500
 	},
 
 	bulkhead: {
 		enabled: false,
 		concurrency: 10,
-		maxQueueSize: 100,
+		maxQueueSize: 100
 	},
 
 	transit: {
 		maxQueueSize: 50 * 1000, // 50k ~ 400MB,
-		packetLogFilter: [],
+		maxChunkSize: 256 * 1024, // 256KB
 		disableReconnect: false,
-		disableVersionCheck: false
+		disableVersionCheck: false,
+		serviceChangedDebounceTime: 1000
 	},
+
+	uidGenerator: null,
+
+	errorHandler: null,
 
 	cacher: null,
 	serializer: null,
 
-	validation: true,
-	validator: null,
-	metrics: false,
-	metricsRate: 1,
+	validator: true,
+
+	metrics: { enabled: false },
+	tracing: { enabled: false },
+
 	internalServices: true,
 	internalMiddlewares: true,
+
+	dependencyInterval: 1000,
+	dependencyTimeout: 0,
 
 	hotReload: false,
 
 	middlewares: null,
 
-	replCommands: null,
+	replOptions: null,
 
+	metadata: {},
+
+	skipProcessEventRegistration: false,
+
+	/**
+	 * Maximum size of objects that can be serialized
+	 *
+	 * On serialization process, check each object property size (based on length or size property value)
+	 * and trim it, if object size bigger than maxSafeObjectSize value
+	 *
+	 * @type {(number|null)}
+	 */
+	maxSafeObjectSize: null
 	// ServiceFactory: null,
 	// ContextFactory: null
+	// Promise: null
 };
+
+const INTERNAL_MIDDLEWARES = [
+	"ActionHook",
+	"Validator",
+	"Bulkhead",
+	"Cacher",
+	"ContextTracker",
+	"CircuitBreaker",
+	"Timeout",
+	"Retry",
+	"Fallback",
+	"ErrorHandler",
+	"Tracing",
+	"Metrics",
+	"Debounce",
+	"Throttle"
+];
 
 /**
  * Service broker class
  *
  * @class ServiceBroker
+ * @implements {ServiceBrokerClass}
  */
 class ServiceBroker {
-
 	/**
 	 * Creates an instance of ServiceBroker.
 	 *
-	 * @param {Object} options
+	 * @param {BrokerOptions} options
 	 *
 	 * @memberof ServiceBroker
 	 */
@@ -128,11 +199,23 @@ class ServiceBroker {
 		try {
 			this.options = _.defaultsDeep(options, defaultOptions);
 
-			// Promise constructor
-			this.Promise = Promise;
+			// Custom Promise lib
+			if (this.options.Promise) {
+				this.Promise = this.options.Promise;
+			} else {
+				// Use native Promise lib
+				this.Promise = Promise;
+			}
+			utils.polyfillPromise(this.Promise);
 
 			// Broker started flag
 			this.started = false;
+
+			/** @type {Boolean} Broker is starting inital services flag*/
+			this.servicesStarting = false;
+
+			/** @type {Boolean} Broker stopping flag*/
+			this.stopping = false;
 
 			// Class factories
 			this.ServiceFactory = this.options.ServiceFactory || require("./service");
@@ -141,15 +224,17 @@ class ServiceBroker {
 			// Namespace
 			this.namespace = this.options.namespace || "";
 
+			// Metadata
+			this.metadata = this.options.metadata || {};
+
 			// Self nodeID
 			this.nodeID = this.options.nodeID || utils.getNodeID();
 
-			// Logger
-			this.logger = this.getLogger("broker");
+			// Instance ID
+			this.instanceID = utils.generateToken();
 
-			this.logger.info(`Moleculer v${this.MOLECULER_VERSION} is starting...`);
-			this.logger.info(`Node ID: ${this.nodeID}`);
-			this.logger.info(`Namespace: ${this.namespace || "<not defined>"}`);
+			// Internal maps
+			this.services = [];
 
 			// Internal event bus
 			this.localBus = new EventEmitter2({
@@ -157,21 +242,38 @@ class ServiceBroker {
 				maxListeners: 100
 			});
 
-			// Internal maps
-			this.services = [];
+			// Log Factory
+			this.loggerFactory = new LoggerFactory(this);
+			this.loggerFactory.init(this.options.logger);
 
-			// Service registry
-			this.registry = new Registry(this);
+			// Logger
+			this.logger = this.getLogger("broker");
+
+			this.logger.info(`Moleculer v${this.MOLECULER_VERSION} is starting...`);
+			this.logger.info(`Namespace: ${this.namespace || "<not defined>"}`);
+			this.logger.info(`Node ID: ${this.nodeID}`);
+
+			// Async storage for Contexts
+			//this.scope = new AsyncStorage(this);
+
+			// Metrics Registry
+			this.metrics = new MetricRegistry(this, this.options.metrics);
+			this.metrics.init(this);
+			this.registerMoleculerMetrics();
 
 			// Middleware handler
 			this.middlewares = new MiddlewareHandler(this);
+			this.middlewares.middlewareInterceptors["call"] = this.interceptCallMiddleware;
+
+			// Service registry
+			this.registry = new Registry(this);
 
 			// Cacher
 			this.cacher = Cachers.resolve(this.options.cacher);
 			if (this.cacher) {
 				this.cacher.init(this);
 
-				const name = this.cacher.constructor.name;
+				const name = utils.getConstructorName(this.cacher);
 				this.logger.info(`Cacher: ${name}`);
 			}
 
@@ -179,51 +281,75 @@ class ServiceBroker {
 			this.serializer = Serializers.resolve(this.options.serializer);
 			this.serializer.init(this);
 
-			const serializerName = this.serializer.constructor.name;
+			// Error regenerator
+			this.errorRegenerator = Errors.resolveRegenerator(this.options.errorRegenerator);
+			this.errorRegenerator.init(this);
+
+			const serializerName = utils.getConstructorName(this.serializer);
 			this.logger.info(`Serializer: ${serializerName}`);
 
-			// Validation
-			if (this.options.validation !== false) {
-				this.validator = this.options.validator ? this.options.validator : new Validator();
+			// Validator
+			if (this.options.validator) {
+				this.validator = Validators.resolve(this.options.validator);
 				if (this.validator) {
+					const validatorName = utils.getConstructorName(this.validator);
+					this.logger.info(`Validator: ${validatorName}`);
 					this.validator.init(this);
 				}
 			}
+
+			// Tracing
+			this.tracer = new Tracer(this, this.options.tracing);
+			this.tracer.init();
+
+			// Register middlewares
+			this.registerMiddlewares(this.options.middlewares);
 
 			// Transit & Transporter
 			if (this.options.transporter) {
 				const tx = Transporters.resolve(this.options.transporter);
 				this.transit = new Transit(this, tx, this.options.transit);
 
-				const txName = tx.constructor.name;
+				const txName = utils.getConstructorName(tx);
 				this.logger.info(`Transporter: ${txName}`);
 
 				if (this.options.disableBalancer) {
 					if (tx.hasBuiltInBalancer) {
 						this.logger.info("The broker built-in balancer is DISABLED.");
 					} else {
-						this.logger.warn(`The ${txName} has no built-in balancer. Broker balancer is ENABLED.`);
+						this.logger.warn(
+							`The ${txName} has no built-in balancer. Broker balancer is ENABLED.`
+						);
 						this.options.disableBalancer = false;
 					}
 				}
 			}
 
+			// Change the call method if balancer is disabled
 			if (this.options.disableBalancer) {
 				this.call = this.callWithoutBalancer;
 			}
 
-			// Register middlewares
-			this.registerMiddlewares(this.options.middlewares);
+			if (this.options.transit.serviceChangedDebounceTime > 0) {
+				// Create debounced localServiceChanged
+				const origLocalServiceChanged = this.localServiceChanged;
+				this.localServiceChanged = _.debounce(
+					() => origLocalServiceChanged.call(this),
+					this.options.transit.serviceChangedDebounceTime
+				);
+			}
+
+			this.registry.init();
 
 			// Register internal actions
 			if (this.options.internalServices)
-				this.registerInternalServices();
+				this.registerInternalServices(this.options.internalServices);
 
-			this.middlewares.callSyncHandlers("created", [this]);
+			// Call `created` event handler in middlewares
+			this.callMiddlewareHookSync("created", [this]);
 
-			// Call `created` event handler
-			if (_.isFunction(this.options.created))
-				this.options.created(this);
+			// Call `created` event handler from options
+			if (utils.isFunction(this.options.created)) this.options.created(this);
 
 			// Graceful exit
 			this._closeFn = () => {
@@ -234,79 +360,136 @@ class ServiceBroker {
 			};
 
 			process.setMaxListeners(0);
-			if ((this.options.skipProcessEventRegistration || false) !== true) {
+			if (this.options.skipProcessEventRegistration === false) {
 				process.on("beforeExit", this._closeFn);
 				process.on("exit", this._closeFn);
 				process.on("SIGINT", this._closeFn);
 				process.on("SIGTERM", this._closeFn);
 			}
-		} catch(err) {
-			if (this.logger)
-				this.fatal("Unable to create ServiceBroker.", err, true);
+		} catch (err) {
+			if (this.logger) this.fatal("Unable to create ServiceBroker.", err, true);
 			else {
 				/* eslint-disable-next-line no-console */
 				console.error("Unable to create ServiceBroker.", err);
+				process.exit(1);
 			}
 		}
-
 	}
 
 	/**
 	 * Register middlewares (user & internal)
 	 *
+	 * @param {MiddlewareHandler.Middleware[]} userMiddlewares
 	 * @memberof ServiceBroker
 	 */
 	registerMiddlewares(userMiddlewares) {
 		// Register user middlewares
 		if (Array.isArray(userMiddlewares) && userMiddlewares.length > 0) {
-			userMiddlewares.forEach(mw => this.middlewares.add(mw));
-
-			this.logger.info(`Registered ${this.middlewares.count()} custom middleware(s).`);
+			_.compact(userMiddlewares).forEach(mw => this.middlewares.add(mw));
 		}
 
 		if (this.options.internalMiddlewares) {
 			// Register internal middlewares
-			const prevCount = this.middlewares.count();
+			INTERNAL_MIDDLEWARES.forEach(mw => this.middlewares.add(mw));
 
-			// 0. ActionHook
-			this.middlewares.add(Middlewares.ActionHook.call(this));
-
-			// 1. Validator
-			if (this.validator && _.isFunction(this.validator.middleware))
-				this.middlewares.add(this.validator.middleware());
-
-			// 2. Bulkhead
-			this.middlewares.add(Middlewares.Bulkhead.call(this));
-
-			// 3. Cacher
-			if (this.cacher && _.isFunction(this.cacher.middleware))
-				this.middlewares.add(this.cacher.middleware());
-
-			// 4. Context tracker
-			this.middlewares.add(Middlewares.ContextTracker.call(this));
-
-			// 5. CircuitBreaker
-			this.middlewares.add(Middlewares.CircuitBreaker.call(this));
-
-			// 6. Timeout
-			this.middlewares.add(Middlewares.Timeout.call(this));
-
-			// 7. Retry
-			this.middlewares.add(Middlewares.Retry.call(this));
-
-			// 8. Fallback
-			this.middlewares.add(Middlewares.Fallback.call(this));
-
-			// 9. Error handler
-			this.middlewares.add(Middlewares.ErrorHandler.call(this));
-
-			// 10. Metrics
-			this.middlewares.add(Middlewares.Metrics.call(this));
-
-			this.logger.info(`Registered ${this.middlewares.count() - prevCount} internal middleware(s).`);
+			if (this.options.hotReload) {
+				// 14. Hot Reload
+				this.middlewares.add("HotReload");
+			}
 		}
+		this.logger.info(`Registered ${this.middlewares.count()} middleware(s).`);
 
-		this.middlewares.wrapBrokerMethods();
+		this.createService = this.wrapMethod("createService", this.createService);
+		this.registerLocalService = this.wrapMethod(
+			"registerLocalService",
+			this.registerLocalService
+		);
+		this.destroyService = this.wrapMethod("destroyService", this.destroyService);
+		this.call = this.wrapMethod("call", this.call);
+		this.callWithoutBalancer = this.wrapMethod("call", this.callWithoutBalancer);
+		this.mcall = this.wrapMethod("mcall", this.mcall);
+		this.emit = this.wrapMethod("emit", this.emit);
+		this.broadcast = this.wrapMethod("broadcast", this.broadcast);
+		this.broadcastLocal = this.wrapMethod("broadcastLocal", this.broadcastLocal);
+
+		this.metrics.set(METRIC.MOLECULER_BROKER_MIDDLEWARES_TOTAL, this.middlewares.count());
+	}
+
+	/**
+	 * It is necessary to keep the context of the call when using call middleware.
+	 */
+	interceptCallMiddleware(createMiddleware) {
+		return next => {
+			let result = null;
+			const call = createMiddleware((...args) => (result = next(...args)));
+			return (...args) => {
+				const promise = call(...args);
+				if (result) promise.ctx = result.ctx;
+				return promise;
+			};
+		};
+	}
+
+	/**
+	 * Register Moleculer Core metrics.
+	 */
+	registerMoleculerMetrics() {
+		if (!this.isMetricsEnabled()) return;
+
+		// --- MOLECULER NODE METRICS ---
+
+		this.metrics
+			.register({
+				name: METRIC.MOLECULER_NODE_TYPE,
+				type: METRIC.TYPE_INFO,
+				description: "Moleculer implementation type"
+			})
+			.set("nodejs");
+		this.metrics
+			.register({
+				name: METRIC.MOLECULER_NODE_VERSIONS_MOLECULER,
+				type: METRIC.TYPE_INFO,
+				description: "Moleculer version number"
+			})
+			.set(ServiceBroker.MOLECULER_VERSION);
+		this.metrics
+			.register({
+				name: METRIC.MOLECULER_NODE_VERSIONS_PROTOCOL,
+				type: METRIC.TYPE_INFO,
+				description: "Moleculer protocol version"
+			})
+			.set(ServiceBroker.PROTOCOL_VERSION);
+
+		// --- MOLECULER BROKER METRICS ---
+
+		this.metrics
+			.register({
+				name: METRIC.MOLECULER_BROKER_NAMESPACE,
+				type: METRIC.TYPE_INFO,
+				description: "Moleculer namespace"
+			})
+			.set(this.namespace);
+		this.metrics
+			.register({
+				name: METRIC.MOLECULER_BROKER_STARTED,
+				type: METRIC.TYPE_GAUGE,
+				description: "ServiceBroker started"
+			})
+			.set(0);
+		this.metrics
+			.register({
+				name: METRIC.MOLECULER_BROKER_LOCAL_SERVICES_TOTAL,
+				type: METRIC.TYPE_GAUGE,
+				description: "Number of local services"
+			})
+			.set(0);
+		this.metrics
+			.register({
+				name: METRIC.MOLECULER_BROKER_MIDDLEWARES_TOTAL,
+				type: METRIC.TYPE_GAUGE,
+				description: "Number of local middlewares"
+			})
+			.set(0);
 	}
 
 	/**
@@ -315,39 +498,53 @@ class ServiceBroker {
 	 * @memberof ServiceBroker
 	 */
 	start() {
-		return Promise.resolve()
+		const startTime = Date.now();
+
+		return this.Promise.resolve()
 			.then(() => {
-				return this.middlewares.callHandlers("starting", [this]);
+				//this.tracer.restartScope();
+				//this.scope.enable();
 			})
 			.then(() => {
-				if (this.transit)
-					return this.transit.connect();
+				return this.callMiddlewareHook("starting", [this]);
+			})
+			.then(() => {
+				if (this.transit) return this.transit.connect();
 			})
 			.then(() => {
 				// Call service `started` handlers
-				return Promise.all(this.services.map(svc => svc._start.call(svc)));
-			})
-			.catch(err => {
-				/* istanbul ignore next */
-				this.logger.error("Unable to start all services.", err);
-				return Promise.reject(err);
+				const startingServices = this.services.map(svc => svc._start.call(svc));
+				// Set servicesStarting, so new services created from now on will be started when registered
+				this.servicesStarting = true;
+				// Wait for services `started` handlers
+				return this.Promise.all(startingServices).catch(err => {
+					/* istanbul ignore next */
+					this.logger.error("Unable to start all services.", err);
+					throw err;
+				});
 			})
 			.then(() => {
-				this.logger.info(`ServiceBroker with ${this.services.length} service(s) is started successfully.`);
 				this.started = true;
-
+				this.servicesStarting = false;
+				this.metrics.set(METRIC.MOLECULER_BROKER_STARTED, 1);
 				this.broadcastLocal("$broker.started");
 			})
 			.then(() => {
-				if (this.transit)
-					return this.transit.ready();
+				if (this.transit) return this.transit.ready();
 			})
 			.then(() => {
-				return this.middlewares.callHandlers("started", [this]);
+				return this.callMiddlewareHook("started", [this]);
 			})
 			.then(() => {
-				if (_.isFunction(this.options.started))
-					return this.options.started(this);
+				if (utils.isFunction(this.options.started)) return this.options.started(this);
+			})
+			.then(() => {
+				const duration = Date.now() - startTime;
+				this.logger.info(
+					`✔ ServiceBroker with ${
+						this.services.length
+					} service(s) started successfully in ${utils.humanize(duration)}.`
+				);
 			});
 	}
 
@@ -358,24 +555,36 @@ class ServiceBroker {
 	 */
 	stop() {
 		this.started = false;
-		return Promise.resolve()
+		return this.Promise.resolve()
 			.then(() => {
 				if (this.transit) {
-					this.registry.regenerateLocalRawInfo(true);
+					this.registry.regenerateLocalRawInfo(true, true);
 					// Send empty node info in order to block incoming requests
-					return this.transit.sendNodeInfo();
+					return this.registry.discoverer.sendLocalNodeInfo();
 				}
 			})
 			.then(() => {
-				return this.middlewares.callHandlers("stopping", [this], true);
+				return this.Promise.delay(this.options.registry.stopDelay);
+			})
+			.then(() => {
+				this.stopping = true;
+
+				return this.callMiddlewareHook("stopping", [this], { reverse: true });
 			})
 			.then(() => {
 				// Call service `stopped` handlers
-				return Promise.all(this.services.map(svc => svc._stop.call(svc)));
-			})
-			.catch(err => {
-				/* istanbul ignore next */
-				this.logger.error("Unable to stop all services.", err);
+				return this.Promise.all(this.services.map(svc => svc._stop.call(svc))).catch(
+					err => {
+						/* istanbul ignore next */
+						this.logger.error("Unable to stop all services.", err);
+
+						this.broadcastLocal("$broker.error", {
+							error: err,
+							module: "broker",
+							type: C.FAILED_STOPPING_SERVICES
+						});
+					}
+				);
 			})
 			.then(() => {
 				if (this.transit) {
@@ -388,11 +597,23 @@ class ServiceBroker {
 				}
 			})
 			.then(() => {
-				return this.middlewares.callHandlers("stopped", [this], true);
+				if (this.metrics) {
+					return this.metrics.stop();
+				}
 			})
 			.then(() => {
-				if (_.isFunction(this.options.stopped))
-					return this.options.stopped(this);
+				if (this.tracer) {
+					return this.tracer.stop();
+				}
+			})
+			.then(() => {
+				return this.registry.stop();
+			})
+			.then(() => {
+				return this.callMiddlewareHook("stopped", [this], { reverse: true });
+			})
+			.then(() => {
+				if (utils.isFunction(this.options.stopped)) return this.options.stopped(this);
 			})
 			.catch(err => {
 				/* istanbul ignore next */
@@ -400,15 +621,22 @@ class ServiceBroker {
 			})
 			.then(() => {
 				this.logger.info("ServiceBroker is stopped. Good bye.");
+				this.metrics.set(METRIC.MOLECULER_BROKER_STARTED, 0);
 
 				this.broadcastLocal("$broker.stopped");
 
-				if ((this.options.skipProcessEventRegistration || false) !== true) {
+				if (this.options.skipProcessEventRegistration === false) {
 					process.removeListener("beforeExit", this._closeFn);
 					process.removeListener("exit", this._closeFn);
 					process.removeListener("SIGINT", this._closeFn);
 					process.removeListener("SIGTERM", this._closeFn);
 				}
+			})
+			.then(() => {
+				return this.loggerFactory.stop();
+			})
+			.catch(() => {
+				// Silent
 			});
 	}
 
@@ -417,78 +645,144 @@ class ServiceBroker {
 	 *
 	 * @example
 	 * broker.start().then(() => broker.repl());
-	 *
-	 * @memberof ServiceBroker
+	 * @returns
 	 */
 	repl() {
 		let repl;
 		try {
 			repl = require("moleculer-repl");
-		}
-		catch (error) {
-			console.error("The 'moleculer-repl' package is missing. Please install it with 'npm install moleculer-repl' command."); // eslint-disable-line no-console
-			this.logger.error("The 'moleculer-repl' package is missing. Please install it with 'npm install moleculer-repl' command.");
+		} catch (error) {
+			// eslint-disable-next-line no-console
+			console.error(
+				"The 'moleculer-repl' package is missing. Please install it with 'npm install moleculer-repl' command."
+			);
+			this.logger.error(
+				"The 'moleculer-repl' package is missing. Please install it with 'npm install moleculer-repl' command."
+			);
 			this.logger.debug("ERROR", error);
 			return;
 		}
 
-		if (repl)
-			repl(this, this.options.replCommands);
+		if (repl) {
+			return repl(this, this.options.replOptions);
+		}
+	}
+
+	/**
+	 * Global error handler.
+	 *
+	 * @param {Error} err
+	 * @param {object} info
+	 * @returns
+	 * @memberof ServiceBroker
+	 */
+	errorHandler(err, info) {
+		if (this.options.errorHandler) {
+			return this.options.errorHandler.call(this, err, info);
+		}
+
+		throw err;
+	}
+
+	/**
+	 * Wrap a method with middlewares
+	 *
+	 * @param {string} name
+	 * @param {Function} handler
+	 * @param {any=} bindTo
+	 * @param {Object=} opts
+	 * @returns {any}
+	 *
+	 * @memberof ServiceBroker
+	 */
+	wrapMethod(name, handler, bindTo, opts) {
+		return this.middlewares.wrapMethod(name, handler, bindTo, opts);
+	}
+
+	/**
+	 * Call a handler asynchronously in all middlewares
+	 *
+	 * @param {String} name
+	 * @param {Array<any>} args
+	 * @param {Object=} opts
+	 * @returns {Promise}
+	 *
+	 * @memberof ServiceBroker
+	 */
+	callMiddlewareHook(name, args, opts) {
+		return this.middlewares.callHandlers(name, args, opts);
+	}
+
+	/**
+	 * Call a handler synchronously in all middlewares
+	 *
+	 * @param {String} name
+	 * @param {Array<any>} args
+	 * @param {Object=} opts
+	 * @returns
+	 *
+	 * @memberof ServiceBroker
+	 */
+	callMiddlewareHookSync(name, args, opts) {
+		return this.middlewares.callSyncHandlers(name, args, opts);
+	}
+
+	/**
+	 * Check metrics are enabled.
+	 *
+	 * @returns {boolean}
+	 * @memberof ServiceBroker
+	 */
+	isMetricsEnabled() {
+		return this.metrics.isEnabled();
+	}
+
+	/**
+	 * Check tracing is enabled.
+	 *
+	 * @returns {boolean}
+	 * @memberof ServiceBroker
+	 */
+	isTracingEnabled() {
+		return this.tracer.isEnabled();
 	}
 
 	/**
 	 * Get a custom logger for sub-modules (service, transporter, cacher, context...etc)
 	 *
-	 * @param {String} module	Name of module
-	 * @param {String|object} props	Module properties (service name, version, ...etc
+	 * @param {String} mod	Name of module
+	 * @param {Record<string, any>=} props	Module properties (service name, version, ...etc
 	 * @returns {Logger}
 	 *
 	 * @memberof ServiceBroker
 	 */
-	getLogger(module, props) {
-		if (_.isString(props))
-			props = { mod: props };
+	getLogger(mod, props) {
+		let bindings = Object.assign(
+			{
+				nodeID: this.nodeID,
+				ns: this.namespace,
+				mod
+			},
+			props
+		);
 
-		let bindings = Object.assign({
-			nodeID: this.nodeID,
-			ns: this.namespace,
-			mod: module
-		}, props);
-
-		// Call logger creator
-		if (_.isFunction(this.options.logger))
-			return this.options.logger.call(this, bindings);
-
-		// External logger
-		if (_.isObject(this.options.logger) && this.options.logger !== console)
-			return Logger.extend(this.options.logger);
-
-		// Disable logging
-		if (this.options.logger === false)
-			return Logger.createDefaultLogger();
-
-		// Create console logger
-		return Logger.createDefaultLogger(console, bindings, this.options.logLevel || "info", this.options.logFormatter, this.options.logObjectPrinter);
+		return this.loggerFactory.getLogger(bindings);
 	}
 
 	/**
 	 * Fatal error. Print the message to console and exit the process (if need)
 	 *
 	 * @param {String} message
-	 * @param {Error?} err
-	 * @param {boolean} [needExit=true]
+	 * @param {Error=} err
+	 * @param {boolean=} [needExit=true]
 	 *
 	 * @memberof ServiceBroker
 	 */
 	fatal(message, err, needExit = true) {
+		if (this.logger) this.logger.fatal(message, err);
+		else console.error(message, err); // eslint-disable-line no-console
 
-		if (this.logger)
-			this.logger.fatal(message, err);
-		else
-			console.error(message, err); // eslint-disable-line no-console
-
-		if (needExit)
-			process.exit(1);
+		if (needExit) process.exit(1);
 	}
 
 	/**
@@ -505,13 +799,10 @@ class ServiceBroker {
 
 		let serviceFiles;
 
-		if (Array.isArray(fileMask))
-			serviceFiles = fileMask.map(f => path.join(folder, f));
-		else
-			serviceFiles = glob.sync(path.join(folder, fileMask));
+		if (Array.isArray(fileMask)) serviceFiles = fileMask.map(f => path.join(folder, f));
+		else serviceFiles = globSync(folder + "/" + fileMask);
 
-		if (serviceFiles)
-			serviceFiles.forEach(filename => this.loadService(filename));
+		if (serviceFiles) serviceFiles.forEach(filename => this.loadService(filename));
 
 		return serviceFiles.length;
 	}
@@ -519,126 +810,83 @@ class ServiceBroker {
 	/**
 	 * Load a service from file
 	 *
-	 * @param {string} 		Path of service
-	 * @returns	{Service}	Loaded service
+	 * @param {string} filePath
+	 * @returns	{Service}
 	 *
 	 * @memberof ServiceBroker
 	 */
 	loadService(filePath) {
-		let fName = path.resolve(filePath);
-		let schema;
-
-		this.logger.debug(`Load service '${path.basename(fName)}'...`);
+		let fName, schema;
 
 		try {
-			schema = require(fName);
-		} catch (e) {
-			this.logger.error(`Failed to load service '${fName}'`, e);
-			throw e;
-		}
+			fName = require.resolve(path.resolve(filePath));
+			this.logger.debug(`Load service '${path.basename(fName)}'...`);
 
-		let svc;
-		schema = this.normalizeSchemaConstructor(schema);
-		if (this.ServiceFactory.isPrototypeOf(schema)) {
-			// Service implementation
-			svc = new schema(this);
+			const r = require(fName);
+			schema = r.default != null ? r.default : r;
 
-			// If broker is started, call the started lifecycle event of service
-			if (this.started)
-				this._restartService(svc);
+			let svc;
+			schema = this.normalizeSchemaConstructor(schema);
+			if (utils.isInheritedClass(schema, this.ServiceFactory)) {
+				// Service implementation
+				// @ts-ignore
+				svc = new schema(this);
 
-		} else if (_.isFunction(schema)) {
-			// Function
-			svc = schema(this);
-			if (!(svc instanceof this.ServiceFactory)) {
-				svc = this.createService(svc);
-			} else {
 				// If broker is started, call the started lifecycle event of service
-				if (this.started)
-					this._restartService(svc);
+				if (this.started || this.servicesStarting) this._restartService(svc);
+			} else if (utils.isFunction(schema)) {
+				// Function
+				svc = schema(this);
+				if (!utils.isInheritedClass(svc, this.ServiceFactory)) {
+					svc = this.createService(svc);
+				} else {
+					// If broker is started, call the started lifecycle event of service
+					if (this.started || this.servicesStarting) this._restartService(svc);
+				}
+			} else if (schema) {
+				// Schema object
+				svc = this.createService(schema);
 			}
 
-		} else if (schema) {
-			// Schema object
-			svc = this.createService(schema);
-		}
+			if (svc) {
+				svc.__filename = fName;
+			}
 
-		if (svc) {
-			svc.__filename = fName;
-		}
-
-		if (this.options.hotReload) {
-			this.watchService(svc || { __filename: fName, name: fName });
-		}
-
-		return svc;
-	}
-
-	/**
-	 * Watch a service file and hot reload if it's changed.
-	 *
-	 * @param {Service} service
-	 * @memberof ServiceBroker
-	 */
-	watchService(service) {
-		if (service.__filename) {
-			const debouncedHotReload = _.debounce(this.hotReloadService.bind(this), 500);
-
-			this.logger.debug(`Watching '${service.name}' service file...`);
-
-			// Better: https://github.com/paulmillr/chokidar
-			const watcher = fs.watch(service.__filename, (eventType, filename) => {
-				this.logger.info(`The ${filename} is changed. (Type: ${eventType})`);
-
-				watcher.close();
-				debouncedHotReload(service);
+			return svc;
+		} catch (e) {
+			this.logger.error(`Failed to load service '${filePath}'`, e);
+			this.broadcastLocal("$broker.error", {
+				error: e,
+				module: "broker",
+				type: C.FAILED_LOAD_SERVICE
 			});
+			throw e;
 		}
-	}
-
-	/**
-	 * Hot reload a service
-	 *
-	 * @param {Service} service
-	 * @returns {Service} Reloaded service instance
-	 *
-	 * @memberof ServiceBroker
-	 */
-	hotReloadService(service) {
-		this.logger.info(`Hot reload '${service.name}' service...`, service.__filename);
-
-		utils.clearRequireCache(service.__filename);
-
-		return this.destroyService(service)
-			.then(() => this.loadService(service.__filename));
 	}
 
 	/**
 	 * Create a new service by schema
 	 *
-	 * @param {any} schema	Schema of service or a Service class
-	 * @param {any=} schemaMods	Modified schema
+	 * @param {ServiceSchema} schema	Schema of service or a Service class
+	 * @param {ServiceSchema=} schemaMods	Modified schema
 	 * @returns {Service}
 	 *
 	 * @memberof ServiceBroker
 	 */
 	createService(schema, schemaMods) {
+		/** @type {Service} */
 		let service;
 
 		schema = this.normalizeSchemaConstructor(schema);
-		if (this.ServiceFactory.isPrototypeOf(schema)) {
+		if (Object.prototype.isPrototypeOf.call(this.ServiceFactory, schema)) {
+			// @ts-ignore
 			service = new schema(this, schemaMods);
 		} else {
-			let s = schema;
-			if (schemaMods)
-				s = this.ServiceFactory.mergeSchemas(schema, schemaMods);
-
-			service = new this.ServiceFactory(this, s);
+			service = new this.ServiceFactory(this, schema, schemaMods);
 		}
 
-		// If broker is started, call the started lifecycle event of service
-		if (this.started)
-			this._restartService(service);
+		// If broker has began to start its initial services yet, call the started lifecycle event of service
+		if (this.started || this.servicesStarting) this._restartService(service);
 
 		return service;
 	}
@@ -649,11 +897,17 @@ class ServiceBroker {
 	 * @param {Service} service
 	 * @returns {Promise}
 	 * @memberof ServiceBroker
-	 * @private
 	 */
 	_restartService(service) {
-		return service._start.call(service)
-			.catch(err => this.logger.error("Unable to start service.", err));
+		return service._start.call(service).catch(err => {
+			this.logger.error("Unable to start service.", err);
+
+			this.broadcastLocal("$broker.error", {
+				error: err,
+				module: "broker",
+				type: C.FAILED_RESTART_SERVICE
+			});
+		});
 	}
 
 	/**
@@ -664,39 +918,73 @@ class ServiceBroker {
 	 */
 	addLocalService(service) {
 		this.services.push(service);
+		this.metrics.set(METRIC.MOLECULER_BROKER_LOCAL_SERVICES_TOTAL, this.services.length);
 	}
 
 	/**
 	 * Register a local service to Service Registry
 	 *
-	 * @param {Object} registryItem
+	 * @param {ServiceItem} registryItem
 	 * @memberof ServiceBroker
 	 */
 	registerLocalService(registryItem) {
 		this.registry.registerLocalService(registryItem);
+
+		return null;
 	}
 
 	/**
 	 * Destroy a local service
 	 *
-	 * @param {Service} service
+	 * @param {Service|string|ServiceDependency} service
+	 * @returns Promise<void>
 	 * @memberof ServiceBroker
 	 */
 	destroyService(service) {
-		return Promise.resolve()
-			.then(() => service._stop())
+		let serviceName;
+		let serviceVersion;
+		/** @type {Service} */
+		let svc;
+		if (utils.isString(service)) {
+			serviceName = service;
+			svc = this.getLocalService(service);
+		} else if (utils.isPlainObject(service)) {
+			serviceName = service.name;
+			serviceVersion = service.version;
+			svc = this.getLocalService(service);
+		} else {
+			svc = service;
+		}
+
+		if (!svc) {
+			return this.Promise.reject(
+				new E.ServiceNotFoundError({ service: serviceName, version: serviceVersion })
+			);
+		}
+
+		return this.Promise.resolve()
+			.then(() => svc._stop())
 			.catch(err => {
 				/* istanbul ignore next */
-				this.logger.error(`Unable to stop '${service.name}' service.`, err);
+				this.logger.error(`Unable to stop '${svc.fullName}' service.`, err);
+
+				this.broadcastLocal("$broker.error", {
+					error: err,
+					module: "broker",
+					type: C.FAILED_DESTRUCTION_SERVICE
+				});
 			})
 			.then(() => {
-				_.remove(this.services, svc => svc == service);
-				this.registry.unregisterService(service.name, service.version);
+				utils.removeFromArray(this.services, svc);
+				this.registry.unregisterService(svc.fullName, this.nodeID);
 
-				this.logger.info(`Service '${service.name}' is stopped.`);
+				this.logger.info(`Service '${svc.fullName}' is stopped.`);
 				this.servicesChanged(true);
 
-				return Promise.resolve();
+				this.metrics.set(
+					METRIC.MOLECULER_BROKER_LOCAL_SERVICES_TOTAL,
+					this.services.length
+				);
 			});
 	}
 
@@ -708,96 +996,162 @@ class ServiceBroker {
 	 */
 	servicesChanged(localService = false) {
 		this.broadcastLocal("$services.changed", { localService });
-
 		// Should notify remote nodes, because our service list is changed.
-		if (this.started && localService && this.transit) {
-			this.transit.sendNodeInfo();
+		if (localService && this.transit) {
+			this.localServiceChanged();
+		}
+	}
+
+	/**
+	 * It's a debounced method to send INFO packets to remote nodes.
+	 */
+	localServiceChanged() {
+		if (!this.stopping) {
+			this.registry.discoverer.sendLocalNodeInfo();
 		}
 	}
 
 	/**
 	 * Register internal services
+	 * @param {Partial<ServiceSchema>?} opts
 	 *
 	 * @memberof ServiceBroker
 	 */
-	registerInternalServices() {
-		this.createService(require("./internals")(this));
+	registerInternalServices(opts) {
+		opts = utils.isObject(opts) ? opts : {};
+		/** @type {import("./service").ServiceSchema} */
+		const internalsSchema = require("./internals")();
+		// If it's present any custom definition, define it as the root schema and the default one as a mixin
+		if (opts["$node"]) {
+			const definitiveSchema = opts["$node"];
+			if (!definitiveSchema.mixins) definitiveSchema.mixins = [];
+			definitiveSchema.mixins.push(internalsSchema);
+			this.createService(definitiveSchema);
+		} else {
+			// Otherwise, just use the default one
+			this.createService(internalsSchema);
+		}
 	}
 
 	/**
 	 * Get a local service by name
 	 *
-	 * @param {String} name
-	 * @param {String|Number} version
+	 * Example:
+	 * 	getLocalService("v2.posts");
+	 * 	getLocalService({ name: "posts", version: 2 });
+	 *
+	 * @param {String|ServiceDependency} name
 	 * @returns {Service}
 	 *
 	 * @memberof ServiceBroker
 	 */
-	getLocalService(name, version) {
-		return this.services.find(service => service.name == name && service.version == version);
+	getLocalService(name) {
+		if (utils.isString(name)) return this.services.find(service => service.fullName == name);
+		else if (utils.isPlainObject(name))
+			return this.services.find(
+				service => service.name == name.name && service.version == name.version
+			);
 	}
 
 	/**
 	 * Wait for other services
 	 *
-	 * @param {String|Array<String>} serviceNames
-	 * @param {Number} timeout Timeout in milliseconds
-	 * @param {Number} interval Check interval in milliseconds
+	 * @param {String|Array<String>|ServiceDependency|Array<ServiceDependency>} service
+	 * @param {Number=} timeout Timeout in milliseconds
+	 * @param {Number=} interval Check interval in milliseconds
 	 * @returns {Promise}
 	 *
 	 * @memberof ServiceBroker
 	 */
-	waitForServices(serviceNames, timeout, interval, logger = this.logger) {
-		if (!Array.isArray(serviceNames))
-			serviceNames = [serviceNames];
+	waitForServices(
+		service,
+		timeout = this.options.dependencyTimeout,
+		interval = this.options.dependencyInterval,
+		logger = this.logger
+	) {
+		let serviceNames = Array.isArray(service) ? service : [service];
 
-		const serviceObjs = serviceNames.map(x => {
-			if (_.isPlainObject(x)) {
-				return x;
-			}
+		serviceNames = utils.uniq(
+			_.compact(
+				serviceNames.map(x => {
+					if (utils.isPlainObject(x) && x.name) {
+						if (Array.isArray(x.version)) {
+							return x.version.map(v =>
+								this.ServiceFactory.getVersionedFullName(x.name, v)
+							);
+						} else {
+							return this.ServiceFactory.getVersionedFullName(x.name, x.version);
+						}
+					} else if (utils.isString(x)) {
+						return x;
+					}
+				})
+			)
+		);
 
-			if (_.isString(x)) {
-				// Parse versioned service identifier strings
-				const split = x.split(".");
-				if (
-					split.length === 2 &&
-					split[0].length > 0 &&
-					split[0].match(/^v\d+$/)
-				) {
-					return {
-						name: split[1],
-						version: Number(split[0].slice(1)),
-					};
-				}
-				// If not versioned, fall back to the existing default action to hopefully avoid breaking existing implementations
-			}
+		if (serviceNames.length === 0) return this.Promise.resolve({ services: [], statuses: [] });
 
-			return { name: x };
-		}).filter(x => x.name);
-
-		if (serviceObjs.length == 0)
-			return Promise.resolve();
-
-		logger.info(`Waiting for service(s) '${_.map(serviceObjs, "name").join(", ")}'...`);
+		logger.info(
+			`Waiting for service(s) '${serviceNames
+				.map(n => (Array.isArray(n) ? n.join(" OR ") : n))
+				.join(", ")}'...`
+		);
 
 		const startTime = Date.now();
-		return new Promise((resolve, reject) => {
+		return new this.Promise((resolve, reject) => {
 			const check = () => {
-				const count = serviceObjs.filter(svcObj => {
-					return this.registry.hasService(svcObj.name, svcObj.version);
+				const serviceStatuses = serviceNames.map(name => {
+					if (Array.isArray(name)) {
+						return name.map(n => ({
+							name: n,
+							available: this.registry.hasService(n)
+						}));
+					} else {
+						return {
+							name,
+							available: this.registry.hasService(name)
+						};
+					}
 				});
+				const flattenedStatuses = _.flatMap(serviceStatuses, s => s);
+				const names = flattenedStatuses.map(s => s.name);
+				const availableServices = flattenedStatuses.filter(s => s.available);
 
-				if (count.length == serviceObjs.length) {
-					logger.info(`Service(s) '${_.map(serviceObjs, "name").join(", ")}' are available.`);
-					return resolve();
+				const isReady = serviceStatuses.every(status =>
+					Array.isArray(status) ? status.some(n => n.available) : status.available
+				);
+				if (isReady) {
+					logger.info(
+						`Service(s) '${availableServices
+							.map(s => s.name)
+							.join(", ")}' are available.`
+					);
+					return resolve({ services: names, statuses: flattenedStatuses });
 				}
 
-				logger.debug(`${count.length} of ${serviceObjs.length} services are available. Waiting further...`);
+				const unavailableServices = flattenedStatuses.filter(s => !s.available);
+				logger.debug(
+					format(
+						"%d (%s) of %d services are available. %d (%s) are still unavailable. Waiting further...",
+						availableServices.length,
+						availableServices.map(s => s.name).join(", "),
+						serviceStatuses.length,
+						unavailableServices.length,
+						unavailableServices.map(s => s.name).join(", ")
+					)
+				);
 
 				if (timeout && Date.now() - startTime > timeout)
-					return reject(new E.MoleculerServerError("Services waiting is timed out.", 500, "WAITFOR_SERVICES", { services: serviceNames }));
+					return reject(
+						new E.MoleculerServerError(
+							"Services waiting is timed out.",
+							500,
+							"WAITFOR_SERVICES",
+							{ services: names, statuses: flattenedStatuses }
+						)
+					);
 
-				setTimeout(check, interval || 1000);
+				setTimeout(check, interval);
 			};
 
 			check();
@@ -805,29 +1159,17 @@ class ServiceBroker {
 	}
 
 	/**
-	 * Add a middleware to the broker
-	 *
-	 * @param {Function} mws
-	 *
-	 * @deprecated
-	 * @memberof ServiceBroker
-	 */
-	use(...mws) {
-		utils.deprecate("The 'broker.use()' has been deprecated since v0.13. Use 'middlewares: [...]' in broker options instead.");
-		mws.forEach(mw => this.middlewares.add(mw));
-	}
-
-	/**
 	 * Find the next available endpoint for action
 	 *
-	 * @param {String} actionName
+	 * @param {String |ActionEndpoint} actionName
 	 * @param {Object?} opts
-	 * @returns {Endpoint|Error}
+	 * @param {Context?} ctx
+	 * @returns {ActionEndpoint|E.MoleculerRetryableError}
 	 *
 	 * @performance-critical
 	 * @memberof ServiceBroker
 	 */
-	findNextActionEndpoint(actionName, opts) {
+	findNextActionEndpoint(actionName, opts, ctx) {
 		if (typeof actionName !== "string") {
 			return actionName;
 		} else {
@@ -840,7 +1182,6 @@ class ServiceBroker {
 					return new E.ServiceNotFoundError({ action: actionName, nodeID });
 				}
 				return endpoint;
-
 			} else {
 				// Get endpoint list by action name
 				const epList = this.registry.getActionEndpoints(actionName);
@@ -850,7 +1191,7 @@ class ServiceBroker {
 				}
 
 				// Get the next available endpoint
-				const endpoint = epList.next();
+				const endpoint = epList.next(ctx);
 				if (!endpoint) {
 					const errMsg = `Service '${actionName}' is not available.`;
 					this.logger.warn(errMsg);
@@ -864,38 +1205,68 @@ class ServiceBroker {
 	/**
 	 * Call an action
 	 *
-	 * @param {String} actionName	name of action
-	 * @param {Object?} params		params of action
-	 * @param {Object?} opts		options of call (optional)
+	 * @param {String} actionName		name of action
+	 * @param {Object=} params			params of action
+	 * @param {CallingOptions=} opts	options of call (optional)
 	 * @returns {Promise}
 	 *
 	 * @performance-critical
 	 * @memberof ServiceBroker
 	 */
 	call(actionName, params, opts = {}) {
-		const endpoint = this.findNextActionEndpoint(actionName, opts);
-		if (endpoint instanceof Error)
-			return Promise.reject(endpoint);
+		if (params === undefined) params = {}; // Backward compatibility
 
 		// Create context
 		let ctx;
 		if (opts.ctx != null) {
+			const endpoint = this.findNextActionEndpoint(actionName, opts, opts.ctx);
+			if (endpoint instanceof Error) {
+				return this.Promise.reject(endpoint).catch(err =>
+					this.errorHandler(err, { actionName, params, opts })
+				);
+			}
+
 			// Reused context
 			ctx = opts.ctx;
 			ctx.endpoint = endpoint;
 			ctx.nodeID = endpoint.id;
 			ctx.action = endpoint.action;
+			ctx.service = endpoint.action.service;
 		} else {
 			// New root context
-			ctx = this.ContextFactory.create(this, endpoint, params, opts);
+			ctx = this.ContextFactory.create(this, null, params, opts);
+
+			const endpoint = this.findNextActionEndpoint(actionName, opts, ctx);
+			if (endpoint instanceof Error) {
+				return this.Promise.reject(endpoint).catch(err =>
+					this.errorHandler(err, { actionName, params, opts })
+				);
+			}
+
+			ctx.setEndpoint(endpoint);
 		}
 
-		if (ctx.endpoint.local)
-			this.logger.debug("Call action locally.", { action: ctx.action.name, requestID: ctx.requestID });
-		else
-			this.logger.debug("Call action on remote node.", { action: ctx.action.name, nodeID: ctx.nodeID, requestID: ctx.requestID });
+		if (ctx.endpoint.local) {
+			this.logger.debug("Call action locally.", {
+				action: ctx.action.name,
+				requestID: ctx.requestID
+			});
 
-		let p = endpoint.action.handler(ctx);
+			// Stream redirection
+			if (opts.stream) {
+				ctx.stream = opts.stream;
+			}
+		} else {
+			this.logger.debug("Call action on remote node.", {
+				action: ctx.action.name,
+				nodeID: ctx.nodeID,
+				requestID: ctx.requestID
+			});
+		}
+
+		//this.setCurrentContext(ctx);
+
+		let p = ctx.endpoint.action.handler(ctx);
 
 		// Pointer to Context
 		p.ctx = ctx;
@@ -910,16 +1281,18 @@ class ServiceBroker {
 	 * built-in balancer with the "disableBalancer" option.
 	 *
 	 * @param {String} actionName	name of action
-	 * @param {Object?} params		params of action
-	 * @param {Object?} opts 		options of call (optional)
+	 * @param {Object=} params		params of action
+	 * @param {Object=} opts 		options of call (optional)
 	 * @returns {Promise}
 	 *
-	 * @private
 	 * @memberof ServiceBroker
 	 */
 	callWithoutBalancer(actionName, params, opts = {}) {
+		if (params === undefined) params = {}; // Backward compatibility
+
 		let nodeID = null;
-		let endpoint = null;
+		/** @type {ActionEndpoint} */
+		let endpoint;
 		if (typeof actionName !== "string") {
 			endpoint = actionName;
 			actionName = endpoint.action.name;
@@ -930,21 +1303,27 @@ class ServiceBroker {
 				endpoint = this.registry.getActionEndpointByNodeId(actionName, nodeID);
 				if (!endpoint) {
 					this.logger.warn(`Service '${actionName}' is not found on '${nodeID}' node.`);
-					return Promise.reject(new E.ServiceNotFoundError({ action: actionName, nodeID }));
+					return this.Promise.reject(
+						new E.ServiceNotFoundError({ action: actionName, nodeID })
+					).catch(err => this.errorHandler(err, { nodeID, actionName, params, opts }));
 				}
 			} else {
 				// Get endpoint list by action name
 				const epList = this.registry.getActionEndpoints(actionName);
 				if (epList == null) {
 					this.logger.warn(`Service '${actionName}' is not registered.`);
-					return Promise.reject(new E.ServiceNotFoundError({ action: actionName }));
+					return this.Promise.reject(
+						new E.ServiceNotFoundError({ action: actionName })
+					).catch(err => this.errorHandler(err, { actionName, params, opts }));
 				}
 
 				endpoint = epList.getFirst();
 				if (endpoint == null) {
 					const errMsg = `Service '${actionName}' is not available.`;
 					this.logger.warn(errMsg);
-					return Promise.reject(new E.ServiceNotAvailableError({ action: actionName }));
+					return this.Promise.reject(
+						new E.ServiceNotAvailableError({ action: actionName })
+					).catch(err => this.errorHandler(err, { actionName, params, opts }));
 				}
 			}
 		}
@@ -964,7 +1343,11 @@ class ServiceBroker {
 		}
 		ctx.nodeID = nodeID;
 
-		this.logger.debug("Call action on a node.", { action: ctx.action.name, nodeID: ctx.nodeID, requestID: ctx.requestID });
+		this.logger.debug("Call action on a node.", {
+			action: ctx.action.name,
+			nodeID: ctx.nodeID,
+			requestID: ctx.requestID
+		});
 
 		let p = endpoint.action.remoteHandler(ctx);
 
@@ -974,7 +1357,13 @@ class ServiceBroker {
 		return p;
 	}
 
-	_getLocalActionEndpoint(actionName) {
+	/**
+	 *
+	 * @param {string} actionName
+	 * @param {Context=} ctx
+	 * @returns
+	 */
+	_getLocalActionEndpoint(actionName, ctx) {
 		// Find action by name
 		let epList = this.registry.getActionEndpoints(actionName);
 		if (epList == null || !epList.hasLocal()) {
@@ -983,7 +1372,7 @@ class ServiceBroker {
 		}
 
 		// Get local endpoint
-		let endpoint = epList.nextLocal();
+		let endpoint = epList.nextLocal(ctx);
 		if (!endpoint) {
 			this.logger.warn(`Service '${actionName}' is not available locally.`);
 			throw new E.ServiceNotAvailableError({ action: actionName, nodeID: this.nodeID });
@@ -993,187 +1382,283 @@ class ServiceBroker {
 	}
 
 	/**
+	 * @overload
+	 * @param {Record<string, MCallDefinition>} def
+	 * @param {MCallCallingOptions=} opts
+	 * @returns {Promise<Record<string, TResult>>}
+	 */
+	/**
+	 * @overload
+	 * @param {MCallDefinition[]} def
+	 * @param {MCallCallingOptions=} opts
+	 * @returns {Promise<TResult[]>}
+	 */
+	/**
 	 * Multiple action calls.
 	 *
-	 * @param {Array<Object>|Object} def Calling definitions.
-	 * @returns {Promise<Array<Object>|Object>}
-	 *
-	 * @example
-	 * Call `mcall` with an array:
-	 * ```js
-	 * broker.mcall([
-	 * 	{ action: "posts.find", params: { limit: 5, offset: 0 } },
-	 * 	{ action: "users.find", params: { limit: 5, sort: "username" }, opts: { timeout: 500 } }
-	 * ]).then(results => {
-	 * 	let posts = results[0];
-	 * 	let users = results[1];
-	 * })
-	 * ```
-	 *
-	 * @example
-	 * Call `mcall` with an Object:
-	 * ```js
-	 * broker.mcall({
-	 * 	posts: { action: "posts.find", params: { limit: 5, offset: 0 } },
-	 * 	users: { action: "users.find", params: { limit: 5, sort: "username" }, opts: { timeout: 500 } }
-	 * }).then(results => {
-	 * 	let posts = results.posts;
-	 * 	let users = results.users;
-	 * })
-	 * ```
-	 * @throws MoleculerServerError - If the `def` is not an `Array` and not an `Object`.
+	 * @template TResult
+	 * @param {Record<string, MCallDefinition>|MCallDefinition[]} def
+	 * @param {MCallCallingOptions=} opts
+	 * @returns {Promise<Record<string, TResult> | TResult[]>}
 	 * @memberof ServiceBroker
 	 */
-	mcall(def) {
+	mcall(def, opts = {}) {
+		const { settled, ...options } = opts;
 		if (Array.isArray(def)) {
-			return Promise.all(def.map(item => this.call(item.action, item.params, item.options)));
-
-		} else if (_.isObject(def)) {
-			let results = {};
-			return Promise.all(Object.keys(def).map(name => {
+			return /** @type {Promise<TResult[]>} */ (
+				utils.promiseAllControl(
+					def.map(item => this.call(item.action, item.params, item.options || options)),
+					settled,
+					this.Promise
+				)
+			);
+		} else if (utils.isObject(def)) {
+			/** @type {Record<string, TResult>} */
+			const results = {};
+			const promises = Object.keys(def).map(name => {
 				const item = def[name];
-				return this.call(item.action, item.params, item.options).then(res => results[name] = res);
-			})).then(() => results);
+				const callOptions = item.options || options;
+				return this.call(item.action, item.params, callOptions).then(
+					res => (results[name] = res)
+				);
+			});
+
+			const p = utils.promiseAllControl(promises, settled, this.Promise);
+
+			// Pointer to Context
+			// @ts-ignore
+			p.ctx = promises.map(promise => promise.ctx);
+
+			return p.then(() => results);
 		} else {
-			throw new E.MoleculerServerError("Invalid calling definition.", 500, "INVALID_PARAMETERS");
+			return this.Promise.reject(
+				new E.MoleculerServerError("Invalid calling definition.", 500, "INVALID_PARAMETERS")
+			);
 		}
 	}
-
 
 	/**
 	 * Emit an event (grouped & balanced global event)
 	 *
 	 * @param {string} eventName
-	 * @param {any} payload
-	 * @param {String|Array<String>=} groups
-	 * @returns
+	 * @param {any=} payload
+	 * @param {Object=} opts
+	 * @returns {Promise<any>}
 	 *
 	 * @memberof ServiceBroker
 	 */
-	emit(eventName, payload, groups) {
-		if (groups && !Array.isArray(groups))
-			groups = [groups];
+	emit(eventName, payload, opts) {
+		if (Array.isArray(opts) || utils.isString(opts)) opts = { groups: opts };
+		else if (opts == null) opts = {};
 
-		this.logger.debug(`Emit '${eventName}' event`+ (groups ? ` to '${groups.join(", ")}' group(s)` : "") + ".");
+		if (opts.groups && !Array.isArray(opts.groups)) opts.groups = [opts.groups];
+
+		const promises = [];
+
+		const ctx = this.ContextFactory.create(this, null, payload, opts);
+		ctx.eventName = eventName;
+		ctx.eventType = "emit";
+		ctx.eventGroups = opts.groups;
+
+		this.logger.debug(
+			`Emit '${eventName}' event` +
+				(opts.groups ? ` to '${opts.groups.join(", ")}' group(s)` : "") +
+				"."
+		);
 
 		// Call local/internal subscribers
-		if (/^\$/.test(eventName))
-			this.localBus.emit(eventName, payload);
+		if (/^\$/.test(eventName)) this.localBus.emit(eventName, payload);
 
 		if (!this.options.disableBalancer) {
-
-			const endpoints = this.registry.events.getBalancedEndpoints(eventName, groups);
+			const endpoints = this.registry.events.getBalancedEndpoints(
+				eventName,
+				opts.groups,
+				ctx
+			);
 
 			// Grouping remote events (reduce the network traffic)
 			const groupedEP = {};
 
 			endpoints.forEach(([ep, group]) => {
-				if (ep) {
-					if (ep.id == this.nodeID) {
-						// Local service, call handler
-						this.registry.events.callEventHandler(ep.event.handler, payload, this.nodeID, eventName);
-					} else {
-						// Remote service
-						const e = groupedEP[ep.id];
-						if (e)
-							e.push(group);
-						else
-							groupedEP[ep.id] = [group];
-					}
+				if (ep.id === this.nodeID) {
+					// Local service, call handler
+					const newCtx = ctx.copy(ep);
+					promises.push(
+						this.registry.events.callEventHandler(newCtx).catch(err => {
+							// Catch and log the error because it's a local event handler, not throwing further.
+							this.logger.error(err);
+						})
+					);
 				} else {
-					if (groupedEP[null])
-						groupedEP[null].push(group);
+					// Remote service
+					const e = groupedEP[ep.id];
+					if (e) e.groups.push(group);
 					else
-						groupedEP[null] = [group];
+						groupedEP[ep.id] = {
+							ep,
+							groups: [group]
+						};
 				}
 			});
 
 			if (this.transit) {
 				// Remote service
-				return this.transit.sendBalancedEvent(eventName, payload, groupedEP);
+				_.forIn(groupedEP, item => {
+					const newCtx = ctx.copy(item.ep);
+					newCtx.eventGroups = item.groups;
+					promises.push(this.transit.sendEvent(newCtx));
+				});
 			}
-
 		} else if (this.transit) {
 			// Disabled balancer case
+			let groups = opts.groups;
 
-			if (!groups || groups.length == 0) {
+			if (!groups || groups.length === 0) {
 				// Apply to all groups
 				groups = this.getEventGroups(eventName);
 			}
 
-			if (groups.length == 0)
-				return;
+			if (groups.length === 0) return this.Promise.resolve(true);
 
-			return this.transit.sendEventToGroups(eventName, payload, groups);
+			ctx.eventGroups = groups;
+			promises.push(this.transit.sendEvent(ctx));
 		}
+
+		const p = this.Promise.allSettled(promises).then(results => {
+			const err = results.find(r => r.status == "rejected");
+			if (err) return this.Promise.reject(err.reason);
+			return true;
+		});
+
+		if (opts.throwError) {
+			return p;
+		}
+		return p.catch(() => {
+			// swallow the error. It's already logged.
+		});
 	}
 
 	/**
 	 * Broadcast an event for all local & remote services
 	 *
 	 * @param {string} eventName
-	 * @param {any} payload
-	 * @param {String|Array<String>=} groups
-	 * @returns
+	 * @param {any=} payload
+	 * @param {Object=} opts
+	 * @returns {Promise}
 	 *
 	 * @memberof ServiceBroker
 	 */
-	broadcast(eventName, payload, groups = null) {
-		if (groups && !Array.isArray(groups))
-			groups = [groups];
+	broadcast(eventName, payload, opts) {
+		if (Array.isArray(opts) || utils.isString(opts)) opts = { groups: opts };
+		else if (opts == null) opts = {};
 
-		this.logger.debug(`Broadcast '${eventName}' event`+ (groups ? ` to '${groups.join(", ")}' group(s)` : "") + ".");
+		if (opts.groups && !Array.isArray(opts.groups)) opts.groups = [opts.groups];
+
+		const promises = [];
+
+		this.logger.debug(
+			`Broadcast '${eventName}' event` +
+				(opts.groups ? ` to '${opts.groups.join(", ")}' group(s)` : "") +
+				"."
+		);
 
 		if (this.transit) {
+			const ctx = this.ContextFactory.create(this, null, payload, opts);
+			ctx.eventName = eventName;
+			ctx.eventType = "broadcast";
+			ctx.eventGroups = opts.groups;
+
 			if (!this.options.disableBalancer) {
-				const endpoints = this.registry.events.getAllEndpoints(eventName, groups);
+				const endpoints = this.registry.events.getAllEndpoints(eventName, opts.groups);
 
 				// Send to remote services
 				endpoints.forEach(ep => {
 					if (ep.id != this.nodeID) {
-						return this.transit.sendBroadcastEvent(ep.id, eventName, payload, groups);
+						const newCtx = ctx.copy(ep);
+						promises.push(this.transit.sendEvent(newCtx));
 					}
 				});
 			} else {
 				// Disabled balancer case
-				if (!groups || groups.length == 0) {
+				let groups = opts.groups;
+
+				if (!groups || groups.length === 0) {
 					// Apply to all groups
 					groups = this.getEventGroups(eventName);
 				}
 
-				if (groups.length == 0)
-					return;
+				if (groups.length === 0) return; // Return here because balancer disabled, so we can't call the local services.
 
-				return this.transit.sendBroadcastEvent(null, eventName, payload, groups);
+				const endpoints = this.registry.events.getAllEndpoints(eventName, groups);
+
+				// Return here because balancer disabled, so we can't call the local services.
+				endpoints.forEach(ep => {
+					const newCtx = ctx.copy(ep);
+					newCtx.eventGroups = groups;
+					promises.push(this.transit.sendEvent(newCtx));
+				});
 			}
 		}
 
-		// Send to local services
-		return this.broadcastLocal(eventName, payload, groups);
+		if (!this.options.disableBalancer) {
+			// Send to local services
+			promises.push(this.broadcastLocal(eventName, payload, opts));
+		}
+
+		const p = this.Promise.allSettled(promises).then(results => {
+			const err = results.find(r => r.status == "rejected");
+			if (err) return this.Promise.reject(err.reason);
+			return true;
+		});
+
+		if (opts.throwError) {
+			return p;
+		}
+		return p.catch(() => {
+			// swallow the error. It's already logged.
+		});
 	}
 
 	/**
 	 * Broadcast an event for all local services
 	 *
 	 * @param {string} eventName
-	 * @param {any} payload
-	 * @param {Array<String>?} groups
-	 * @param {String?} nodeID
+	 * @param {any=} payload
+	 * @param {Object=} opts
 	 * @returns
 	 *
 	 * @memberof ServiceBroker
 	 */
-	broadcastLocal(eventName, payload, groups = null) {
-		if (groups && !Array.isArray(groups))
-			groups = [groups];
+	broadcastLocal(eventName, payload, opts) {
+		if (Array.isArray(opts) || utils.isString(opts)) opts = { groups: opts };
+		else if (opts == null) opts = {};
 
-		this.logger.debug(`Broadcast '${eventName}' local event`+ (groups ? ` to '${groups.join(", ")}' group(s)` : "") + ".");
+		if (opts.groups && !Array.isArray(opts.groups)) opts.groups = [opts.groups];
+
+		this.logger.debug(
+			`Broadcast '${eventName}' local event` +
+				(opts.groups ? ` to '${opts.groups.join(", ")}' group(s)` : "") +
+				"."
+		);
 
 		// Call internal subscribers
-		if (/^\$/.test(eventName))
-			this.localBus.emit(eventName, payload);
+		if (/^\$/.test(eventName)) this.localBus.emit(eventName, payload);
 
-		return this.emitLocalServices(eventName, payload, groups, this.nodeID, true);
+		const ctx = this.ContextFactory.create(this, null, payload, opts);
+		ctx.eventName = eventName;
+		ctx.eventType = "broadcastLocal";
+		ctx.eventGroups = opts.groups;
+
+		const p = this.emitLocalServices(ctx);
+
+		if (opts.throwError) {
+			return p;
+		}
+
+		return p.catch(err => {
+			// Catch and log the error because it's a local event handler, not throwing further.
+			this.logger.error(err);
+		});
 	}
 
 	/**
@@ -1186,10 +1671,9 @@ class ServiceBroker {
 	 */
 	ping(nodeID, timeout = 2000) {
 		if (this.transit && this.transit.connected) {
-			if (_.isString(nodeID)) {
+			if (utils.isString(nodeID)) {
 				// Ping a single node
-				return new Promise(resolve => {
-
+				return new this.Promise(resolve => {
 					const timer = setTimeout(() => {
 						this.localBus.off("$node.pong", handler);
 						resolve(null);
@@ -1207,22 +1691,21 @@ class ServiceBroker {
 
 					this.transit.sendPing(nodeID);
 				});
-
 			} else {
 				const pongs = {};
 				let nodes = nodeID;
 				if (!nodes) {
-					nodes = this.registry.getNodeList({ onlyAvailable: true })
+					nodes = this.registry
+						.getNodeList({ onlyAvailable: true })
 						.filter(node => node.id != this.nodeID)
 						.map(node => node.id);
 				}
 
-				nodes.forEach(id => pongs[id] = null);
+				nodes.forEach(id => (pongs[id] = null));
 				const processing = new Set(nodes);
 
 				// Ping multiple nodes
-				return new Promise(resolve => {
-
+				return new this.Promise(resolve => {
 					const timer = setTimeout(() => {
 						this.localBus.off("$node.pong", handler);
 						resolve(pongs);
@@ -1232,7 +1715,7 @@ class ServiceBroker {
 						pongs[pong.nodeID] = pong;
 						processing.delete(pong.nodeID);
 
-						if (processing.size == 0) {
+						if (processing.size === 0) {
 							clearTimeout(timer);
 							this.localBus.off("$node.pong", handler);
 							resolve(pongs);
@@ -1252,17 +1735,17 @@ class ServiceBroker {
 	/**
 	 * Get local node health status
 	 *
-	 * @returns {Promise}
+	 * @returns {NodeHealthStatus}
 	 * @memberof ServiceBroker
 	 */
 	getHealthStatus() {
-		return H.getHealthStatus(this);
+		return H.getHealthStatus();
 	}
 
 	/**
 	 * Get local node info.
 	 *
-	 * @returns
+	 * @returns {NodeRawInfo}
 	 * @memberof ServiceBroker
 	 */
 	getLocalNodeInfo() {
@@ -1281,20 +1764,56 @@ class ServiceBroker {
 	}
 
 	/**
+	 * Has registered event listener for an event name?
+	 *
+	 * @param {String} eventName
+	 * @returns {boolean}
+	 */
+	hasEventListener(eventName) {
+		return this.registry.events.getAllEndpoints(eventName).length > 0;
+	}
+
+	/**
+	 * Get all registered event listener for an event name.
+	 *
+	 * @param {String} eventName
+	 * @returns {Array<Object>}
+	 */
+	getEventListeners(eventName) {
+		return this.registry.events.getAllEndpoints(eventName);
+	}
+
+	/**
 	 * Emit event to local nodes. It is called from transit when a remote event received
 	 * or from `broadcastLocal`
 	 *
-	 * @param {String} event
-	 * @param {any} payload
-	 * @param {any} groups
-	 * @param {String} sender
-	 * @param {boolean} broadcast
-	 * @returns
+	 * @param {Context} ctx
+	 * @returns {Promise<any>}
 	 * @memberof ServiceBroker
 	 */
-	emitLocalServices(event, payload, groups, sender, broadcast) {
-		return this.registry.events.emitLocalServices(event, payload, groups, sender, broadcast);
+	emitLocalServices(ctx) {
+		return this.registry.events.emitLocalServices(ctx);
 	}
+
+	/**
+	 * Set the current Context to the async storage.
+	 *
+	 * @param {Context} ctx
+	 * @memberof ServiceBroker
+	 *
+	setCurrentContext(ctx) {
+		this.scope.setSessionData(ctx);
+	}*/
+
+	/**
+	 * Get the current Context from the async storage.
+	 *
+	 * @returns {Context?}
+	 * @memberof ServiceBroker
+	 *
+	getCurrentContext() {
+		return this.scope.getSessionData();
+	}*/
 
 	/**
 	 * Get node overall CPU usage
@@ -1306,54 +1825,54 @@ class ServiceBroker {
 		return cpuUsage();
 	}
 
+	/**
+	 * Generate an UUID.
+	 *
+	 * @returns {String} uuid
+	 */
+	generateUid() {
+		if (this.options.uidGenerator) return this.options.uidGenerator.call(this, this);
+
+		return utils.generateToken();
+	}
 
 	/**
-	 * Get the Constructor name of any object if it exists
-	 * @param {any} obj
-	 * @returns {string}
-	 *
+	 * Only for backward compatibility
 	 */
 	getConstructorName(obj) {
-		let target = obj.prototype;
-		if (target && target.constructor && target.constructor.name){
-			return target.constructor.name;
-		}
-		if (obj.constructor && obj.constructor.name){
-			return obj.constructor.name;
-		}
-		return undefined;
+		return utils.getConstructorName(obj);
 	}
 
 	/**
 	 * Ensure the service schema will be prototype of ServiceFactory;
 	 *
-	 * @param {any} schema
-	 * @returns {string}
+	 * @param {ServiceSchema} schema
+	 * @returns {ServiceSchema}
 	 *
 	 */
 	normalizeSchemaConstructor(schema) {
-		if (this.ServiceFactory.isPrototypeOf(schema)){
+		if (Object.prototype.isPrototypeOf.call(this.ServiceFactory, schema)) {
 			return schema;
 		}
 		// Sometimes the schame was loaded from another node_module or is a object copy.
 		// Then we will check if the constructor name is the same, asume that is a derivate object
 		// and adjust the prototype of the schema.
-		let serviceName = this.getConstructorName(this.ServiceFactory);
-		let target = this.getConstructorName(schema);
-		if (serviceName === target){
+		let serviceName = utils.getConstructorName(this.ServiceFactory);
+		let target = utils.getConstructorName(schema);
+		if (serviceName === target) {
 			Object.setPrototypeOf(schema, this.ServiceFactory);
 			return schema;
 		}
 		// Depending how the schema was create the correct constructor name (from base class) will be locate on __proto__.
-		target = this.getConstructorName(schema.__proto__);
-		if (serviceName === target){
-			Object.setPrototypeOf(schema.__proto__, this.ServiceFactory);
+		target = utils.getConstructorName(Object.getPrototypeOf(schema));
+		if (serviceName === target) {
+			Object.setPrototypeOf(Object.getPrototypeOf(schema), this.ServiceFactory);
 			return schema;
 		}
 		// This is just to handle some idiosyncrasies from Jest.
-		if (schema._isMockFunction){
-			target = this.getConstructorName(schema.prototype.__proto__);
-			if (serviceName === target){
+		if (schema._isMockFunction) {
+			target = utils.getConstructorName(Object.getPrototypeOf(schema.prototype));
+			if (serviceName === target) {
 				Object.setPrototypeOf(schema, this.ServiceFactory);
 				return schema;
 			}
@@ -1371,8 +1890,13 @@ ServiceBroker.prototype.MOLECULER_VERSION = ServiceBroker.MOLECULER_VERSION;
 /**
  * Version of Protocol
  */
-ServiceBroker.PROTOCOL_VERSION = "3";
+ServiceBroker.PROTOCOL_VERSION = "5";
 ServiceBroker.prototype.PROTOCOL_VERSION = ServiceBroker.PROTOCOL_VERSION;
+
+/**
+ * Internal middlewares (order)
+ */
+ServiceBroker.INTERNAL_MIDDLEWARES = INTERNAL_MIDDLEWARES;
 
 /**
  * Default configuration

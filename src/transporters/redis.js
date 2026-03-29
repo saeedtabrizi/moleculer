@@ -1,27 +1,36 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2024 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
 "use strict";
 
-const Promise				= require("bluebird");
-const { MoleculerError } 	= require("../errors");
-const Transporter 			= require("./base");
+const { MoleculerError } = require("../errors");
+const Transporter = require("./base");
+const { BrokerOptionsError } = require("../errors");
+const C = require("../constants");
+const { isObject } = require("../utils");
+
+/**
+ * Import types
+ *
+ * @typedef {import("./redis")} RedisTransporterClass
+ * @typedef {import("./redis").RedisTransporterOptions} RedisTransporterOptions
+ */
 
 /**
  * Transporter for Redis
  *
  * @class RedisTransporter
  * @extends {Transporter}
+ * @implements {RedisTransporterClass}
  */
 class RedisTransporter extends Transporter {
-
 	/**
 	 * Creates an instance of RedisTransporter.
 	 *
-	 * @param {any} opts
+	 * @param {RedisTransporterOptions} opts
 	 *
 	 * @memberof RedisTransporter
 	 */
@@ -38,26 +47,17 @@ class RedisTransporter extends Transporter {
 	 * @memberof RedisTransporter
 	 */
 	connect() {
-		return new Promise((resolve, reject) => {
-			let Redis;
-			try {
-				Redis = require("ioredis");
-				Redis.Promise = Promise;
-			} catch(err) {
-				/* istanbul ignore next */
-				this.broker.fatal("The 'ioredis' package is missing. Please install it with 'npm install ioredis --save' command.", err, true);
-			}
-
-			const clientSub = new Redis(this.opts);
+		return new this.broker.Promise((resolve, reject) => {
+			let clientSub = this.getRedisClient(this.opts);
 			this._clientSub = clientSub; // For tests
 
-			clientSub.on("connect", () => {
+			clientSub.on("ready", () => {
 				this.logger.info("Redis-sub client is connected.");
 
-				const clientPub = new Redis(this.opts);
+				let clientPub = this.getRedisClient(this.opts);
 				this._clientPub = clientPub; // For tests
 
-				clientPub.on("connect", () => {
+				clientPub.on("ready", () => {
 					this.clientSub = clientSub;
 					this.clientPub = clientPub;
 
@@ -67,12 +67,17 @@ class RedisTransporter extends Transporter {
 				});
 
 				/* istanbul ignore next */
-				clientPub.on("error", (e) => {
+				clientPub.on("error", e => {
 					this.logger.error("Redis-pub error", e.message);
 					this.logger.debug(e);
 
-					if (!this.connected)
-						reject(e);
+					this.broker.broadcastLocal("$transporter.error", {
+						error: e,
+						module: "transporter",
+						type: C.FAILED_PUBLISHER_ERROR
+					});
+
+					if (!this.connected) reject(e);
 				});
 
 				/* istanbul ignore next */
@@ -82,16 +87,22 @@ class RedisTransporter extends Transporter {
 				});
 			});
 
-			clientSub.on("messageBuffer", (topicBuf, buf) => {
-				const topic = topicBuf.toString();
-				const cmd = topic.split(".")[1];
-				this.incomingMessage(cmd, buf);
+			clientSub.on("messageBuffer", (rawTopic, buf) => {
+				const topic = rawTopic.toString().substring(this.prefix.length + 1);
+				const cmd = topic.split(".")[0];
+				this.receive(cmd, buf);
 			});
 
 			/* istanbul ignore next */
-			clientSub.on("error", (e) => {
+			clientSub.on("error", e => {
 				this.logger.error("Redis-sub error", e.message);
 				this.logger.debug(e);
+
+				this.broker.broadcastLocal("$transporter.error", {
+					error: e,
+					module: "transporter",
+					type: C.FAILED_CONSUMER_ERROR
+				});
 			});
 
 			/* istanbul ignore next */
@@ -99,7 +110,6 @@ class RedisTransporter extends Transporter {
 				this.connected = false;
 				this.logger.warn("Redis-sub client is disconnected.");
 			});
-
 		});
 	}
 
@@ -118,6 +128,8 @@ class RedisTransporter extends Transporter {
 			this.clientPub.disconnect();
 			this.clientPub = null;
 		}
+
+		return this.broker.Promise.resolve();
 	}
 
 	/**
@@ -130,26 +142,80 @@ class RedisTransporter extends Transporter {
 	 */
 	subscribe(cmd, nodeID) {
 		this.clientSub.subscribe(this.getTopicName(cmd, nodeID));
-		return Promise.resolve();
+		return this.broker.Promise.resolve();
 	}
 
 	/**
-	 * Publish a packet
+	 * Subscribe to balanced action commands
+	 * Not implemented.
 	 *
-	 * @param {Packet} packet
+	 * @returns {Promise}
+	 */
+	subscribeBalancedRequest() {
+		/* istanbul ignore next */
+		return this.broker.Promise.resolve();
+	}
+
+	/**
+	 * Subscribe to balanced event command
+	 * Not implemented.
+	 *
+	 * @returns {Promise}
+	 */
+	subscribeBalancedEvent() {
+		/* istanbul ignore next */
+		return this.broker.Promise.resolve();
+	}
+
+	/**
+	 * Send data buffer.
+	 *
+	 * @param {String} topic
+	 * @param {Buffer} data
+	 *
+	 * @returns {Promise}
+	 */
+	send(topic, data) {
+		/* istanbul ignore next*/
+		if (!this.clientPub)
+			return this.broker.Promise.reject(new MoleculerError("Redis Client is not available"));
+
+		this.clientPub.publish(topic, data);
+		return this.broker.Promise.resolve();
+	}
+
+	/**
+	 * Return redis or redis.cluster client
+	 *
+	 * @param {string|RedisTransporterOptions} opts
 	 *
 	 * @memberof RedisTransporter
 	 */
-	publish(packet) {
-		/* istanbul ignore next*/
-		if (!this.clientPub) return Promise.reject(new MoleculerError("Redis Client is not available"));
-
-		const data = this.serialize(packet);
-		this.incStatSent(data.length);
-		this.clientPub.publish(this.getTopicName(packet.type, packet.target), data);
-		return Promise.resolve();
+	getRedisClient(opts) {
+		let client;
+		let R;
+		try {
+			R = require("ioredis");
+		} catch (err) {
+			/* istanbul ignore next */
+			this.broker.fatal(
+				"The 'ioredis' package is missing. Please install it with 'npm install ioredis --save' command.",
+				err,
+				true
+			);
+		}
+		if (isObject(opts) && opts.cluster) {
+			if (!opts.cluster.nodes || opts.cluster.nodes.length === 0) {
+				throw new BrokerOptionsError("No nodes defined for cluster");
+			}
+			this.logger.info("Setting Redis.Cluster transporter");
+			client = new R.Cluster(opts.cluster.nodes, opts.cluster.clusterOptions);
+		} else {
+			this.logger.info("Setting Redis transporter");
+			client = new R.Redis(/** @type {any} */ (opts));
+		}
+		return client;
 	}
-
 }
 
 module.exports = RedisTransporter;

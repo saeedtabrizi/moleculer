@@ -1,12 +1,12 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
 "use strict";
 
-const _ = require("lodash");
+const { isObject, isString } = require("../utils");
 const { BrokerOptionsError } = require("../errors");
 
 const Strategies = {
@@ -14,46 +14,45 @@ const Strategies = {
 	RoundRobin: require("./round-robin"),
 	Random: require("./random"),
 	CpuUsage: require("./cpu-usage"),
-	Latency: require("./latency")
+	Latency: require("./latency"),
+	Shard: require("./shard")
 };
 
 function getByName(name) {
 	/* istanbul ignore next */
-	if (!name)
-		return null;
+	if (!name) return null;
 
 	let n = Object.keys(Strategies).find(n => n.toLowerCase() == name.toLowerCase());
-	if (n)
-		return Strategies[n];
+	if (n) return Strategies[n];
 }
 
 /**
  * Resolve strategy by name
  *
- * @param {object|string} opt
- * @returns {Strategy}
- * @memberof ServiceBroker
+ * @param {Record<string, any>|string} opt
+ * @returns {any}
  */
 function resolve(opt) {
-	if (Strategies.Base.isPrototypeOf(opt)) {
+	if (Object.prototype.isPrototypeOf.call(Strategies.Base, opt)) {
 		return opt;
-	} else if (_.isString(opt)) {
-		let SerializerClass = getByName(opt);
-		if (SerializerClass)
-			return SerializerClass;
+	} else if (isString(opt)) {
+		let StrategyClass = getByName(opt);
+		if (StrategyClass) return StrategyClass;
+		else throw new BrokerOptionsError(`Invalid strategy type '${opt}'.`, { type: opt });
+	} else if (isObject(opt)) {
+		let StrategyClass = getByName(opt.type || "RoundRobin");
+		if (StrategyClass) return StrategyClass;
 		else
-			throw new BrokerOptionsError(`Invalid strategy type '${opt}'.`, { type: opt });
-
-	} else if (_.isObject(opt)) {
-		let SerializerClass = getByName(opt.type || "RoundRobin");
-		if (SerializerClass)
-			return SerializerClass;
-		else
-			throw new BrokerOptionsError(`Invalid strategy type '${opt.type}'.`, { type: opt.type });
+			throw new BrokerOptionsError(`Invalid strategy type '${opt.type}'.`, {
+				type: opt.type
+			});
 	}
 
 	return Strategies.RoundRobin;
 }
 
-module.exports = Object.assign({ resolve }, Strategies);
+function register(name, value) {
+	Strategies[name] = value;
+}
 
+module.exports = Object.assign(Strategies, { resolve, register });

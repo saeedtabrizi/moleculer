@@ -1,6 +1,6 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
@@ -10,14 +10,22 @@ const Writable = require("stream").Writable;
 const { resolvePacketType } = require("./constants");
 
 /**
+ * Import types
+ *
+ * @typedef {import("./parser")} ParserClass
+ */
+
+/**
  * TCP packet parser
+ * @class Parser
+ * @extends {Writable}
+ * @implements {ParserClass}
  */
 class Parser extends Writable {
-
 	/**
 	 * Create an instance of Parser
 	 *
-	 * @param {*} options
+	 * @param {Record<string, any>} options
 	 */
 	constructor(options, maxPacketSize) {
 		super(options);
@@ -28,7 +36,6 @@ class Parser extends Writable {
 	}
 
 	_write(chunk, encoding, cb) {
-
 		let packet = chunk;
 		if (this.buf && this.buf.length > 0) {
 			// There is previous chunk, concatenate them
@@ -38,7 +45,6 @@ class Parser extends Writable {
 
 		// Find all messages from the chunk
 		while (packet.length > 0) {
-
 			if (packet.length < 6) {
 				// Too short, waiting for the next chunk
 				this.buf = Buffer.from(packet);
@@ -46,7 +52,11 @@ class Parser extends Writable {
 			}
 
 			if (this.maxPacketSize && packet.length > this.maxPacketSize) {
-				return cb(new Error(`Incoming packet is larger than the 'maxPacketSize' limit (${packet.length} > ${this.maxPacketSize})!`));
+				return cb(
+					new Error(
+						`Incoming packet is larger than the 'maxPacketSize' limit (${packet.length} > ${this.maxPacketSize})!`
+					)
+				);
 			}
 
 			// Check the CRC
@@ -66,14 +76,12 @@ class Parser extends Writable {
 
 				// Remove processed message from incoming data
 				packet = packet.slice(length);
-
 			} else {
 				// The chunk is not contain the whole message.
 				// Waiting for the next one.
 				this.buf = Buffer.from(packet);
 				return cb();
 			}
-
 		}
 		cb();
 	}

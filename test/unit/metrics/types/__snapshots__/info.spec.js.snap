@@ -1,0 +1,36 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`Test Base Metric class Test generateSnapshot method should generate a snapshot 1`] = `
+[
+  {
+    "key": "",
+    "labels": {},
+    "timestamp": 1111,
+    "value": "John",
+  },
+  {
+    "key": "1",
+    "labels": {
+      "a": 1,
+    },
+    "timestamp": 2222,
+    "value": "Jane",
+  },
+  {
+    "key": "5",
+    "labels": {
+      "a": 5,
+    },
+    "timestamp": 3333,
+    "value": "Adam",
+  },
+  {
+    "key": "true",
+    "labels": {
+      "a": true,
+    },
+    "timestamp": 4444,
+    "value": "Steve",
+  },
+]
+`;

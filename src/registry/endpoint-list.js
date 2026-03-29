@@ -1,6 +1,6 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
@@ -10,27 +10,43 @@ const _ = require("lodash");
 const { MoleculerServerError } = require("../errors");
 
 /**
+ * Import types
+ *
+ * @typedef {import("./registry")} Registry
+ * @typedef {import("../strategies/base")} Strategy
+ * @typedef {import("../service-broker")} ServiceBroker
+ * @typedef {import("./endpoint-list")} EndpointListClass
+ * @typedef {import("../context")} Context
+ * @typedef {import("./node")} Node
+ * @typedef {import("./endpoint")} Endpoint
+ * @typedef {import("./service-item")} ServiceItem
+ */
+
+/**
  * Endpoint list class
  *
+ * @template TEndpoint
  * @class EndpointList
+ * @implements {EndpointListClass}
  */
 class EndpointList {
-
 	/**
 	 * Creates an instance of EndpointList.
 	 * @param {Registry} registry
 	 * @param {ServiceBroker} broker
 	 * @param {String} name
 	 * @param {String} group
-	 * @param {EndPointClass} EndPointFactory
-	 * @param {Strategy} StrategyFactory
+	 * @param {typeof import("./endpoint")} EndPointFactory
+	 * @param {typeof import("../strategies/base")} StrategyFactory
+	 * @param {Object?} strategyOptions
 	 * @memberof EndpointList
 	 */
-	constructor(registry, broker, name, group, EndPointFactory, StrategyFactory) {
+	constructor(registry, broker, name, group, EndPointFactory, StrategyFactory, strategyOptions) {
 		this.registry = registry;
 		this.broker = broker;
 		this.logger = registry.logger;
-		this.strategy = new StrategyFactory(registry, broker);
+		// @ts-ignore
+		this.strategy = new StrategyFactory(registry, broker, strategyOptions);
 		this.name = name;
 		this.group = group;
 		this.internal = name.startsWith("$");
@@ -40,16 +56,15 @@ class EndpointList {
 		this.endpoints = [];
 
 		this.localEndpoints = [];
-		this.localStrategy = new StrategyFactory(registry, broker);
 	}
 
 	/**
 	 * Add a new endpoint
 	 *
 	 * @param {Node} node
-	 * @param {Service} service
+	 * @param {ServiceItem} service
 	 * @param {any} data
-	 * @returns
+	 * @returns {Endpoint}
 	 * @memberof EndpointList
 	 */
 	add(node, service, data) {
@@ -59,6 +74,7 @@ class EndpointList {
 			return found;
 		}
 
+		// @ts-ignore
 		const ep = new this.EndPointFactory(this.registry, this.broker, node, service, data);
 		this.endpoints.push(ep);
 
@@ -70,12 +86,11 @@ class EndpointList {
 	/**
 	 * Get first endpoint
 	 *
-	 * @returns {Endpoint}
+	 * @returns {Endpoint | null}
 	 * @memberof EndpointList
 	 */
 	getFirst() {
-		if (this.endpoints.length > 0)
-			return this.endpoints[0];
+		if (this.endpoints.length > 0) return this.endpoints[0];
 
 		return null;
 	}
@@ -83,14 +98,21 @@ class EndpointList {
 	/**
 	 * Select next endpoint with balancer strategy
 	 *
-	 * @returns
+	 * @param {Array<Endpoint>} list
+	 * @param {Context} ctx
+	 * @returns {Endpoint}
 	 * @memberof EndpointList
 	 */
-	select(list) {
-		const ret = this.strategy.select(list);
+	select(list, ctx) {
+		const ret = this.strategy.select(list, ctx);
 		if (!ret) {
 			/* istanbul ignore next */
-			throw new MoleculerServerError("Strategy returned an invalid endpoint.", 500, "INVALID_ENDPOINT", { strategy: typeof(this.strategy) });
+			throw new MoleculerServerError(
+				"Strategy returned an invalid endpoint.",
+				500,
+				"INVALID_ENDPOINT",
+				{ strategy: typeof this.strategy }
+			);
 		}
 		return ret;
 	}
@@ -98,10 +120,11 @@ class EndpointList {
 	/**
 	 * Get next endpoint
 	 *
-	 * @returns
+	 * @param {Context} ctx
+	 * @returns {Endpoint | null}
 	 * @memberof EndpointList
 	 */
-	next() {
+	next(ctx) {
 		// No items
 		if (this.endpoints.length === 0) {
 			return null;
@@ -109,40 +132,38 @@ class EndpointList {
 
 		// If internal (service), return the local always
 		if (this.internal && this.hasLocal()) {
-			return this.nextLocal();
+			return this.nextLocal(ctx);
 		}
 
 		// Only 1 item
 		if (this.endpoints.length === 1) {
 			// No need to select a node, return the only one
 			const item = this.endpoints[0];
-			if (item.isAvailable)
-				return item;
+			if (item.isAvailable) return item;
 
 			return null;
 		}
 
 		// Search local item
 		if (this.registry.opts.preferLocal === true && this.hasLocal()) {
-			const ep = this.nextLocal();
-			if (ep && ep.isAvailable)
-				return ep;
+			const ep = this.nextLocal(ctx);
+			if (ep && ep.isAvailable) return ep;
 		}
 
 		const epList = this.endpoints.filter(ep => ep.isAvailable);
-		if (epList.length == 0)
-			return null;
+		if (epList.length === 0) return null;
 
-		return this.select(epList);
+		return this.select(epList, ctx);
 	}
 
 	/**
 	 * Get next local endpoint
 	 *
+	 * @param {Context} ctx
 	 * @returns
 	 * @memberof EndpointList
 	 */
-	nextLocal() {
+	nextLocal(ctx) {
 		// No items
 		if (this.localEndpoints.length === 0) {
 			return null;
@@ -152,23 +173,21 @@ class EndpointList {
 		if (this.localEndpoints.length === 1) {
 			// No need to select a node, return the only one
 			const item = this.localEndpoints[0];
-			if (item.isAvailable)
-				return item;
+			if (item.isAvailable) return item;
 
 			return null;
 		}
 
 		const epList = this.localEndpoints.filter(ep => ep.isAvailable);
-		if (epList.length == 0)
-			return null;
+		if (epList.length === 0) return null;
 
-		return this.select(epList);
+		return this.select(epList, ctx);
 	}
 
 	/**
 	 * Check there is available endpoint
 	 *
-	 * @returns
+	 * @returns {boolean}
 	 * @memberof EndpointList
 	 */
 	hasAvailable() {
@@ -178,7 +197,7 @@ class EndpointList {
 	/**
 	 * Check there is local endpoint
 	 *
-	 * @returns
+	 * @returns {boolean}
 	 * @memberof EndpointList
 	 */
 	hasLocal() {
@@ -197,7 +216,7 @@ class EndpointList {
 	/**
 	 * Get count of endpoints
 	 *
-	 * @returns
+	 * @returns {Number}
 	 * @memberof EndpointList
 	 */
 	count() {
@@ -208,13 +227,12 @@ class EndpointList {
 	 * Get endpoint on a specified node
 	 *
 	 * @param {String} nodeID
-	 * @returns
+	 * @returns {Endpoint | null}
 	 * @memberof EndpointList
 	 */
 	getEndpointByNodeID(nodeID) {
 		const ep = this.endpoints.find(ep => ep.id == nodeID);
-		if (ep && ep.isAvailable)
-			return ep;
+		if (ep && ep.isAvailable) return ep;
 
 		return null;
 	}
@@ -223,7 +241,7 @@ class EndpointList {
 	 * Check nodeID in the endpoint list
 	 *
 	 * @param {String} nodeID
-	 * @returns
+	 * @returns {boolean}
 	 * @memberof EndpointList
 	 */
 	hasNodeID(nodeID) {

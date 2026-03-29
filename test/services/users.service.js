@@ -1,16 +1,15 @@
-let _ = require("lodash");
-let fakerator = require("fakerator")();
-let { ValidationError } = require("../../src/errors");
-const Promise = require("bluebird");
+const _ = require("lodash");
+const fakerator = require("fakerator")();
+const { ValidationError } = require("../../src/errors");
 
-let { delay } = require("../../src/utils");
+const { delay } = require("../../src/utils");
 
 let users = fakerator.times(fakerator.entity.user, 10);
 
-_.each(users, (user, i) => user.id = i + 1);
+_.each(users, (user, i) => (user.id = i + 1));
 let c = 0;
 
-module.exports = function(broker) {
+module.exports = function (broker) {
 	return new broker.ServiceFactory(broker, {
 		name: "users",
 

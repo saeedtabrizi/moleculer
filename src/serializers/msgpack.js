@@ -1,6 +1,6 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
@@ -9,18 +9,24 @@
 const BaseSerializer = require("./base");
 
 /**
+ * Import types
+ *
+ * @typedef {import("../service-broker")} ServiceBroker
+ * @typedef {import("./msgpack")} MsgPackSerializerClass
+ */
+
+/**
  * MessagePack serializer for Moleculer
  *
  * https://github.com/mcollina/msgpack5
  *
- * @class MsgPackSerializer
+ * @implements {MsgPackSerializerClass}
  */
 class MsgPackSerializer extends BaseSerializer {
-
 	/**
 	 * Initialize Serializer
 	 *
-	 * @param {any} broker
+	 * @param {ServiceBroker} broker
 	 *
 	 * @memberof Serializer
 	 */
@@ -29,9 +35,13 @@ class MsgPackSerializer extends BaseSerializer {
 
 		try {
 			this.msgpack = require("msgpack5")();
-		} catch(err) {
+		} catch (err) {
 			/* istanbul ignore next */
-			this.broker.fatal("The 'msgpack5' package is missing! Please install it with 'npm install msgpack5 --save' command!", err, true);
+			this.broker.fatal(
+				"The 'msgpack5' package is missing! Please install it with 'npm install msgpack5 --save' command!",
+				err,
+				true
+			);
 		}
 	}
 
@@ -51,7 +61,7 @@ class MsgPackSerializer extends BaseSerializer {
 	/**
 	 * Deserialize Buffer to JS object
 	 *
-	 * @param {Buffer} str
+	 * @param {any} buf
 	 * @returns {Object}
 	 *
 	 * @memberof Serializer

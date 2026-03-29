@@ -1,32 +1,33 @@
 "use strict";
 
-const ServiceBroker = require("../../../../src/service-broker");
 const { protectReject } = require("../../utils");
 
-// const lolex = require("lolex");
-jest.mock("net");
-const net = require("net");
+// const lolex = require("@sinonjs/fake-timers");
+jest.mock("../../../../src/transporters/tcp/parser", () => {
+	return jest.fn().mockImplementation(() => {
+		let callbacks = {};
+		let parser = {
+			on: jest.fn((type, cb) => (callbacks[type] = cb)),
+			__callbacks: callbacks
+		};
 
-jest.mock("../../../../src/transporters/tcp/parser");
-
-let Parser = require("../../../../src/transporters/tcp/parser");
-Parser.mockImplementation(() => {
-	let callbacks = {};
-	let parser = {
-		on: jest.fn((type, cb) => callbacks[type] = cb),
-		__callbacks: callbacks
-	};
-
-	return parser;
+		return parser;
+	});
 });
+
+const ServiceBroker = require("../../../../src/service-broker");
+const broker = new ServiceBroker({ logger: false });
+
+const net = require("net");
+jest.mock("net");
 
 const TcpReader = require("../../../../src/transporters/tcp/tcp-reader");
 
 describe("Test TcpReader constructor", () => {
-
 	it("check constructor", () => {
 		let transporter = {
-			logger: jest.fn()
+			logger: jest.fn(),
+			broker
 		};
 		let opts = { port: 1234 };
 		let reader = new TcpReader(transporter, opts);
@@ -37,17 +38,15 @@ describe("Test TcpReader constructor", () => {
 		expect(reader.sockets).toBeInstanceOf(Array);
 		expect(reader.logger).toBe(transporter.logger);
 	});
-
 });
 
 describe("Test TcpReader.listen", () => {
-	const broker = new ServiceBroker({ logger: false });
 	let transporter, reader;
 
 	let listenCb, serverErrorCb;
 	let server = {
-		on: jest.fn((type, cb) => serverErrorCb = cb),
-		listen: jest.fn((type, cb) => listenCb = cb),
+		on: jest.fn((type, cb) => (serverErrorCb = cb)),
+		listen: jest.fn((type, cb) => (listenCb = cb)),
 		address: jest.fn(() => ({ port: 5000 }))
 	};
 
@@ -62,7 +61,8 @@ describe("Test TcpReader.listen", () => {
 			getNode: jest.fn(() => null),
 			getNodeAddress: jest.fn(() => "node-2-host"),
 			sendHello: jest.fn(() => Promise.resolve()),
-			logger: broker.logger
+			logger: broker.logger,
+			broker
 		};
 
 		reader = new TcpReader(transporter, { port: 1234 });
@@ -71,32 +71,38 @@ describe("Test TcpReader.listen", () => {
 	it("should create server & listen", () => {
 		reader.onTcpClientConnected = jest.fn();
 
-		let p = reader.listen().catch(protectReject).then(() => {
-			expect(reader.server).toBe(server);
+		let p = reader
+			.listen()
+			.catch(protectReject)
+			.then(() => {
+				expect(reader.server).toBe(server);
 
-			expect(server.on).toHaveBeenCalledTimes(1);
-			expect(server.on).toHaveBeenCalledWith("error", jasmine.any(Function));
+				expect(server.on).toHaveBeenCalledTimes(1);
+				expect(server.on).toHaveBeenCalledWith("error", expect.any(Function));
 
-			expect(server.listen).toHaveBeenCalledTimes(1);
+				expect(server.listen).toHaveBeenCalledTimes(1);
 
-			if (process.versions.node.split(".")[0] >= 8) {
-				expect(server.listen).toHaveBeenCalledWith({ port: 1234, exclusive: true }, jasmine.any(Function));
-			} else {
-				expect(server.listen).toHaveBeenCalledWith(1234, jasmine.any(Function));
-			}
+				if (process.versions.node.split(".")[0] >= 8) {
+					expect(server.listen).toHaveBeenCalledWith(
+						{ port: 1234, exclusive: true },
+						expect.any(Function)
+					);
+				} else {
+					expect(server.listen).toHaveBeenCalledWith(1234, expect.any(Function));
+				}
 
-			expect(reader.opts.port).toBe(5000);
-			expect(reader.connected).toBe(true);
+				expect(reader.opts.port).toBe(5000);
+				expect(reader.connected).toBe(true);
 
-			// Fire new connection event handler
-			expect(reader.onTcpClientConnected).toHaveBeenCalledTimes(0);
+				// Fire new connection event handler
+				expect(reader.onTcpClientConnected).toHaveBeenCalledTimes(0);
 
-			let socket = {};
-			netCreateCB(socket);
+				let socket = {};
+				netCreateCB(socket);
 
-			expect(reader.onTcpClientConnected).toHaveBeenCalledTimes(1);
-			expect(reader.onTcpClientConnected).toHaveBeenCalledWith(socket);
-		});
+				expect(reader.onTcpClientConnected).toHaveBeenCalledTimes(1);
+				expect(reader.onTcpClientConnected).toHaveBeenCalledWith(socket);
+			});
 
 		listenCb();
 
@@ -104,20 +110,21 @@ describe("Test TcpReader.listen", () => {
 	});
 
 	it("should reject on server error", () => {
-		let p = reader.listen().then(protectReject).catch(err => {
-			expect(err).toBeInstanceOf(Error);
-			expect(err.message).toBe("Server error");
-		});
+		let p = reader
+			.listen()
+			.then(protectReject)
+			.catch(err => {
+				expect(err).toBeInstanceOf(Error);
+				expect(err.message).toBe("Server error");
+			});
 
 		serverErrorCb(new Error("Server error"));
 
 		return p;
 	});
-
 });
 
 describe("Test TcpReader.onTcpClientConnected", () => {
-	const broker = new ServiceBroker({ logger: false });
 	let transporter, socket, reader;
 
 	beforeEach(() => {
@@ -125,27 +132,27 @@ describe("Test TcpReader.onTcpClientConnected", () => {
 			getNode: jest.fn(() => null),
 			getNodeAddress: jest.fn(() => "node-2-host"),
 			sendHello: jest.fn(() => Promise.resolve()),
-			logger: broker.logger
+			logger: broker.logger,
+			broker
 		};
 
 		let socketCallbacks = {};
 		socket = {
-			on: jest.fn((type, cb) => socketCallbacks[type] = cb),
-			pipe: jest.fn(parser => socket.parser = parser),
+			on: jest.fn((type, cb) => (socketCallbacks[type] = cb)),
+			pipe: jest.fn(parser => (socket.parser = parser)),
 			remoteAddress: "192.168.1.2",
 			setNoDelay: jest.fn(),
 			__callbacks: socketCallbacks
 		};
-		reader = new TcpReader(transporter, { maxPacketSize : 5000 });
+		reader = new TcpReader(transporter, { maxPacketSize: 5000 });
 	});
 
 	it("should create parser and set event handlers", () => {
-
 		reader.onTcpClientConnected(socket);
 
 		expect(socket.on).toHaveBeenCalledTimes(2);
-		expect(socket.on).toHaveBeenCalledWith("error", jasmine.any(Function));
-		expect(socket.on).toHaveBeenCalledWith("close", jasmine.any(Function));
+		expect(socket.on).toHaveBeenCalledWith("error", expect.any(Function));
+		expect(socket.on).toHaveBeenCalledWith("close", expect.any(Function));
 
 		expect(socket.setNoDelay).toHaveBeenCalledTimes(1);
 		expect(socket.setNoDelay).toHaveBeenCalledWith(true);
@@ -174,7 +181,7 @@ describe("Test TcpReader.onTcpClientConnected", () => {
 		socket.parser.__callbacks.error(parserErr);
 
 		expect(reader.closeSocket).toHaveBeenCalledTimes(1);
-		expect(reader.closeSocket).toHaveBeenCalledWith(socket, parserErr);
+		expect(reader.closeSocket).toHaveBeenCalledWith(socket);
 	});
 
 	it("should call closeSocket on socket error", () => {
@@ -186,7 +193,7 @@ describe("Test TcpReader.onTcpClientConnected", () => {
 		socket.__callbacks.error(socketErr);
 
 		expect(reader.closeSocket).toHaveBeenCalledTimes(1);
-		expect(reader.closeSocket).toHaveBeenCalledWith(socket, socketErr);
+		expect(reader.closeSocket).toHaveBeenCalledWith(socket);
 	});
 
 	it("should call closeSocket on socket close", () => {
@@ -202,9 +209,7 @@ describe("Test TcpReader.onTcpClientConnected", () => {
 	});
 });
 
-
 describe("Test TcpReader.close", () => {
-	const broker = new ServiceBroker({ logger: false });
 	let transporter, reader;
 
 	beforeEach(() => {
@@ -212,25 +217,14 @@ describe("Test TcpReader.close", () => {
 			getNode: jest.fn(() => null),
 			getNodeAddress: jest.fn(() => "node-2-host"),
 			sendHello: jest.fn(() => Promise.resolve()),
-			logger: broker.logger
-		};
-
-		reader = new TcpReader(transporter, {});
-	});
-
-	beforeEach(() => {
-		transporter = {
-			getNode: jest.fn(() => null),
-			getNodeAddress: jest.fn(() => "node-2-host"),
-			sendHello: jest.fn(() => Promise.resolve()),
-			logger: broker.logger
+			logger: broker.logger,
+			broker
 		};
 
 		reader = new TcpReader(transporter, { port: 1234 });
 	});
 
 	it("should close socket & remove from sockets list", () => {
-
 		let destroy = jest.fn();
 		reader.sockets.push({ id: 1, destroy });
 		reader.sockets.push({ id: 2, destroy });
@@ -244,7 +238,6 @@ describe("Test TcpReader.close", () => {
 	});
 
 	it("should close server & all sockets", () => {
-
 		let server = {
 			listening: true,
 			close: jest.fn()
@@ -263,5 +256,4 @@ describe("Test TcpReader.close", () => {
 		expect(reader.sockets.length).toBe(0);
 		expect(destroy).toHaveBeenCalledTimes(3);
 	});
-
 });

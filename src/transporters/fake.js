@@ -1,15 +1,19 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
 "use strict";
 
-const Promise		= require("bluebird");
-const Transporter 	= require("./base");
-
+const Transporter = require("./base");
 const EventEmitter2 = require("eventemitter2").EventEmitter2;
+
+/**
+ * Import types
+ *
+ * @typedef {import("./fake")} FakeTransporterClass
+ */
 
 // Put to global to transfer messages between brokers in the same process
 global.bus = new EventEmitter2({
@@ -22,13 +26,13 @@ global.bus = new EventEmitter2({
  *
  * @class FakeTransporter
  * @extends {Transporter}
+ * @implements {FakeTransporterClass}
  */
 class FakeTransporter extends Transporter {
-
 	/**
 	 * Creates an instance of FakeTransporter.
 	 *
-	 * @param {any} opts
+	 * @param {Record<string, any>} opts
 	 *
 	 * @memberof FakeTransporter
 	 */
@@ -38,6 +42,8 @@ class FakeTransporter extends Transporter {
 		// Local event bus
 		this.bus = global.bus;
 		this.hasBuiltInBalancer = true;
+
+		this.subscriptions = [];
 	}
 
 	/**
@@ -56,7 +62,10 @@ class FakeTransporter extends Transporter {
 	 */
 	disconnect() {
 		this.connected = false;
-		return Promise.resolve();
+		this.subscriptions.forEach(({ topic, handler }) => this.bus.off(topic, handler));
+		this.subscriptions = [];
+
+		return this.broker.Promise.resolve();
 	}
 
 	/**
@@ -69,70 +78,43 @@ class FakeTransporter extends Transporter {
 	 */
 	subscribe(cmd, nodeID) {
 		const t = this.getTopicName(cmd, nodeID);
-		this.bus.on(t, msg => this.incomingMessage(cmd, msg));
-		return Promise.resolve();
+		const handler = msg => this.receive(cmd, msg);
+		this.subscriptions.push({ topic: t, handler });
+
+		this.bus.on(t, handler);
+		return this.broker.Promise.resolve();
 	}
 
 	/**
 	 * Subscribe to balanced action commands
 	 *
-	 * @param {String} action
 	 * @memberof AmqpTransporter
 	 */
-	subscribeBalancedRequest(/*action*/) {
-		return Promise.resolve();
+	subscribeBalancedRequest() {
+		return this.broker.Promise.resolve();
 	}
 
 	/**
 	 * Subscribe to balanced event command
 	 *
-	 * @param {String} event
-	 * @param {String} group
 	 * @memberof AmqpTransporter
 	 */
-	subscribeBalancedEvent(/*event, group*/) {
-		return Promise.resolve();
+	subscribeBalancedEvent() {
+		return this.broker.Promise.resolve();
 	}
 
 	/**
-	 * Publish a packet
+	 * Send data buffer.
 	 *
-	 * @param {Packet} packet
+	 * @param {String} topic
+	 * @param {Buffer} data
 	 *
-	 * @memberof FakeTransporter
-	 */
-	publish(packet) {
-		this.bus.emit(this.getTopicName(packet.type, packet.target), this.serialize(packet));
-		return Promise.resolve();
-	}
-
-	/**
-	 * Publish a balanced EVENT packet to a balanced queue
-	 *
-	 * @param {Packet} packet
-	 * @param {String} group
 	 * @returns {Promise}
-	 *
-	 * @memberof BaseTransporter
 	 */
-	publishBalancedEvent(/*packet, group*/) {
-		/* istanbul ignore next */
-		return Promise.resolve();
+	send(topic, data) {
+		this.bus.emit(topic, data);
+		return this.broker.Promise.resolve();
 	}
-
-	/**
-	 * Publish a balanced REQ packet to a balanced queue
-	 *
-	 * @param {Packet} packet
-	 * @returns {Promise}
-	 *
-	 * @memberof BaseTransporter
-	 */
-	publishBalancedRequest(/*packet*/) {
-		/* istanbul ignore next */
-		return Promise.resolve();
-	}
-
 }
 
 module.exports = FakeTransporter;

@@ -1,21 +1,20 @@
 ![Moleculer logo](docs/assets/logo.png)
 
-[![Build Status](https://travis-ci.org/moleculerjs/moleculer.svg?branch=master)](https://travis-ci.org/moleculerjs/moleculer)
+![CI test](https://github.com/moleculerjs/moleculer/workflows/CI%20test/badge.svg)
 [![Coverage Status](https://coveralls.io/repos/github/moleculerjs/moleculer/badge.svg?branch=master)](https://coveralls.io/github/moleculerjs/moleculer?branch=master)
-[![Codacy Badge](https://api.codacy.com/project/badge/Grade/ec4dab24e4ea4c1eb0d1590f12c81a46)](https://www.codacy.com/app/mereg-norbert/moleculer?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=moleculerjs/moleculer&amp;utm_campaign=Badge_Grade)
 [![Maintainability](https://api.codeclimate.com/v1/badges/05ef990fe1ccb3e56067/maintainability)](https://codeclimate.com/github/moleculerjs/moleculer/maintainability)
-[![David](https://img.shields.io/david/moleculerjs/moleculer.svg)](https://david-dm.org/moleculerjs/moleculer)
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/d3dbf0facae04c128054ac2047d1e117)](https://www.codacy.com/gh/moleculerjs/moleculer/dashboard?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=moleculerjs/moleculer&amp;utm_campaign=Badge_Grade)
 [![Known Vulnerabilities](https://snyk.io/test/github/moleculerjs/moleculer/badge.svg)](https://snyk.io/test/github/moleculerjs/moleculer)
-[![Join the chat at https://gitter.im/moleculerjs/moleculer](https://badges.gitter.im/moleculerjs/moleculer.svg)](https://gitter.im/moleculerjs/moleculer?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+[![Discord chat](https://img.shields.io/discord/585148559155003392)](https://discord.gg/TSEcDRP)
+[![Gurubase](https://img.shields.io/badge/Gurubase-Ask%20Moleculer%20Guru-006BFF)](https://gurubase.io/g/moleculer)
 
 [![Downloads](https://img.shields.io/npm/dm/moleculer.svg)](https://www.npmjs.com/package/moleculer)
-[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fmoleculerjs%2Fmoleculer.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fmoleculerjs%2Fmoleculer?ref=badge_shield)
-[![Patreon](docs/assets/patreon.svg)][patreon] [![PayPal](docs/assets/paypal_donate.svg)][paypal]
+[![Patreon](docs/assets/patreon.svg)][patreon]
 
 # Moleculer [![NPM version](https://img.shields.io/npm/v/moleculer.svg)](https://www.npmjs.com/package/moleculer) [![Twitter URL](https://img.shields.io/twitter/url/http/shields.io.svg?style=social&logo=twitter)](https://twitter.com/intent/tweet?text=Moleculer%20is%20a%20modern%20microservices%20framework%20for%20Node.js&url=https://github.com/moleculerjs/moleculer&via=MoleculerJS&hashtags=nodejs,javascript,microservices)
 
 
-Moleculer is a progressive microservices framework for Node.js.
+Moleculer is a fast, modern and powerful microservices framework for [Node.js](https://nodejs.org/en/). It helps you to build efficient, reliable & scalable services. Moleculer provides many features for building and managing your microservices.
 <!--
 ![](https://img.shields.io/badge/performance-%2B50%25-brightgreen.svg)
 ![](https://img.shields.io/badge/performance-%2B5%25-green.svg)
@@ -27,31 +26,41 @@ Moleculer is a progressive microservices framework for Node.js.
 
 **Documentation**: [https://moleculer.services/docs](https://moleculer.services/docs)
 
+# Top sponsors
+
+<table style="text-align:center;"><tr>
+    <td><a href="https://www.servereye.de/" target="_blank"><img src="https://www.servereye.de/wp-content/uploads/server-eye_logo2019.png" width="300" valign="middle" /></a></td>
+    <!--td><a href="https://sonderformat.llc/" target="_blank"><img src="https://sonderformat.llc/sonderformat/logo/sonderformat-wide-col.png" width="300" valign="middle" /></a></td-->
+</tr></table>
+
+
 # What's included
 
-- Promise-based solution
+- Promise-based solution (async/await compatible)
 - request-reply concept
-- support streams
 - support event driven architecture with balancing
 - built-in service registry & dynamic service discovery
-- load balanced requests & events (round-robin, random, cpu-usage, latency)
+- load balanced requests & events (round-robin, random, cpu-usage, latency, sharding)
 - many fault tolerance features (Circuit Breaker, Bulkhead, Retry, Timeout, Fallback)
-- supports middlewares
-- supports versioned services
+- plugin/middleware system
+- support versioned services
+- support [Streams](https://nodejs.org/docs/latest/api/stream.html)
 - service mixins
-- built-in caching solution (memory, Redis)
-- pluggable transporters (TCP, NATS, MQTT, Redis, NATS Streaming, Kafka)
-- pluggable serializers (JSON, Avro, MsgPack, Protocol Buffer, Thrift)
-- pluggable validator
+- built-in caching solution (Memory, MemoryLRU, Redis)
+- pluggable loggers (Console, File, Pino, Bunyan, Winston, Debug, Datadog, Log4js)
+- pluggable transporters (TCP, NATS, MQTT, Redis, Kafka, AMQP 0.9, AMQP 1.0)
+- pluggable serializers (JSON, JSONExt, MsgPack, CBOR, Notepack)
+- pluggable parameter validator
 - multiple services on a node/server
-- all nodes are equal, no master/leader node
-- parameter validation with [fastest-validator](https://github.com/icebob/fastest-validator)
-- built-in health monitoring & metrics
-- official [API gateway module](https://github.com/moleculerjs/moleculer-web) and many other modules...
+- master-less architecture, all nodes are equal
+- built-in parameter validation with [fastest-validator](https://github.com/icebob/fastest-validator)
+- built-in metrics feature with reporters (Console, CSV, Datadog, Event, Prometheus, StatsD)
+- built-in tracing feature with exporters (Console, Datadog, Event, Jaeger, Zipkin, NewRelic)
+- official [API gateway](https://github.com/moleculerjs/moleculer-web), [Database access](https://github.com/moleculerjs/moleculer-db) and many other modules...
 
 # Installation
 ```
-$ npm install moleculer --save
+$ npm i moleculer
 ```
 or
 ```
@@ -64,7 +73,7 @@ This example shows you how to create a small service with an `add` action which 
 const { ServiceBroker } = require("moleculer");
 
 // Create a broker
-let broker = new ServiceBroker({ logger: console });
+const broker = new ServiceBroker();
 
 // Create a service
 broker.createService({
@@ -83,41 +92,45 @@ broker.start()
     .then(res => console.log("5 + 3 =", res))
     .catch(err => console.error(`Error occurred! ${err.message}`));
 ```
-[Try it on Runkit](https://runkit.com/icebob/moleculer-quick-example)
+[Try it in your browser](https://codesandbox.io/s/ky5lj09jv?fontsize=14)
 
 # Create a Moleculer project
 Use the Moleculer CLI tool to create a new Moleculer based microservices project.
 
-1. Install [moleculer-cli](https://github.com/moleculerjs/moleculer-cli) globally
+1. Create a new project (named `moleculer-demo`)
     ```bash
-    $ npm install moleculer-cli -g
-    ```
-2. Create a new project (named `first-demo`)
-    ```bash
-    $ moleculer init project first-demo
-    ```
-    > Press Y on API Gateway & `npm install`
-    
-3. Open project folder
-    ```bash
-    $ cd first-demo
+    $ npx moleculer-cli -c moleculer init project moleculer-demo
     ```
     
-4. Start project
+2. Open the project folder
+    ```bash
+    $ cd moleculer-demo
+    ```
+    
+3. Start the project
     ```bash
     $ npm run dev
     ```
-5. Open the [http://localhost:3000/](http://localhost:3000/) link in your browser. It shows a start page which contains two links to call the `greeter` service via [API gateway](https://github.com/moleculerjs/moleculer-web).
 
-:tada:**Congratulations! Your first Moleculer based microservices project is created. Read our [documentation](https://moleculer.services/docs) to learn more about Moleculer.**
+4. Open the [http://localhost:3000/](http://localhost:3000/) link in your browser. It shows a welcome page that contains more information about your project & you can test the generated services.
+
+:tada: **Congratulations! Your first Moleculer-based microservices project is created. Read our [documentation](https://moleculer.services/docs) to learn more about Moleculer.**
+
+![Welcome page](docs/assets/project-welcome-page.png)
 
 # Official modules
 We have many official modules for Moleculer. [Check our list!](https://moleculer.services/modules.html)
 
 # Supporting
-Moleculer is an open source project. It is free to use for your personal or commercial projects. However, developing it takes up all my free time to make it better and better on a daily basis. If you like Moleculer framework, **[please support it](https://moleculer.services/support.html)**.
+Moleculer is an open source project. It is free to use for your personal or commercial projects. However, developing it takes up all our free time to make it better and better on a daily basis. If you like Moleculer framework, **[please support it](https://moleculer.services/support.html)**.
 
 Thank you very much!
+
+# For enterprise
+
+Available as part of the Tidelift Subscription.
+
+The maintainers of moleculer and thousands of other packages are working with Tidelift to deliver commercial support and maintenance for the open source dependencies you use to build your applications. Save time, reduce risk, and improve code health, while paying the maintainers of the exact dependencies you use. [Learn more.](https://tidelift.com/subscription/pkg/npm-moleculer?utm_source=npm-moleculer&utm_medium=referral&utm_campaign=enterprise&utm_term=repo)
 
 # Documentation
 You can find here [the documentation](https://moleculer.services/docs).
@@ -125,19 +138,24 @@ You can find here [the documentation](https://moleculer.services/docs).
 # Changelog
 See [CHANGELOG.md](CHANGELOG.md).
 
+# Security contact information
+To report a security vulnerability, please use the [Tidelift security contact](https://tidelift.com/security).
+Tidelift will coordinate the fix and disclosure.
+
 # Contributions
-We welcome you to join to the development of Moleculer. Please read our [contribution guide](http://moleculer.services/docs/contributing.html).
-<a href="https://github.com/moleculerjs/moleculer/graphs/contributors"><img src="https://opencollective.com/moleculer/contributors.svg?width=890&button=false" /></a>
+We welcome you to join in the development of Moleculer. Please read our [contribution guide](http://moleculer.services/docs/contributing.html).
+<a href="https://github.com/moleculerjs/moleculer/graphs/contributors"><img src="https://opencollective.com/moleculer/contributors.svg?width=882&button=false" /></a>
+
+## Project activity
+
+![Alt](https://repobeats.axiom.co/api/embed/f4cb6da776e9edc2d8118aff4e0c1ae9afe37896.svg "Repobeats analytics image")
 
 # License
 Moleculer is available under the [MIT license](https://tldrlegal.com/license/mit-license).
 
-[3rd party licenses](https://app.fossa.io/reports/09fc5b4f-d321-4f68-b859-8c61fe3eb6dc)
-
 # Contact
-Copyright (c) 2016-2018 MoleculerJS
+Copyright (c) 2016-2026 MoleculerJS
 
 [![@moleculerjs](https://img.shields.io/badge/github-moleculerjs-green.svg)](https://github.com/moleculerjs) [![@MoleculerJS](https://img.shields.io/badge/twitter-MoleculerJS-blue.svg)](https://twitter.com/MoleculerJS)
 
-[paypal]: https://paypal.me/meregnorbert/50usd
 [patreon]: https://www.patreon.com/bePatron?u=6245171

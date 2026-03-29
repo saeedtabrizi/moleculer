@@ -1,4 +1,3 @@
-/*eslint-disable no-console */
 "use strict";
 
 module.exports = {
@@ -6,7 +5,10 @@ module.exports = {
 		if (err && err.stack) {
 			console.error(err);
 			console.error(err.stack);
+		} else {
+			console.error(new Error("Protect reject called with: " + err));
 		}
+
 		expect(err).toBe(true);
 	},
 
@@ -21,9 +23,7 @@ module.exports = {
 					}
 				}
 
-				let list = expected
-					.map(item => item.toString())
-					.join(", ");
+				let list = expected.map(item => item.toString()).join(", ");
 				let message = `Expected ${received.toString()} to be any of [${list}]`;
 
 				return {
@@ -31,7 +31,7 @@ module.exports = {
 					message: () => message,
 					pass
 				};
-			},
+			}
 		});
 	}
 };

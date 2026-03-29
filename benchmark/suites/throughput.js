@@ -1,20 +1,18 @@
-/* eslint-disable no-console */
-
 "use strict";
 
-//let _ = require("lodash");
-let chalk = require("chalk");
-let ServiceBroker = require("../../src/service-broker");
-let Promise = require("bluebird");
+const kleur = require("kleur");
+const ServiceBroker = require("../../src/service-broker");
+const { polyfillPromise } = require("../../").Utils;
+polyfillPromise(Promise);
 
-let { getDataFile } = require("../utils");
+const { getDataFile } = require("../utils");
 
-let Benchmarkify = require("benchmarkify");
-let benchmark = new Benchmarkify("Throughput benchmark").printHeader();
+const Benchmarkify = require("benchmarkify");
+new Benchmarkify("Throughput benchmark").printHeader();
 
-let dataFiles = ["10"];//, "150", "1k", "10k", "50k", "100k", "1M"];
+const dataFiles = ["10"]; //, "150", "1k", "10k", "50k", "100k", "1M"];
 
-const MAX = 20 * 1000;
+const MAX = 10 * 1000;
 let received = 0;
 let resolve = null;
 let startTime;
@@ -24,8 +22,14 @@ function done() {
 	endTime = Date.now();
 
 	let mps = parseInt(MAX / ((endTime - startTime) / 1000));
-	console.log("Messages  : " + received.toLocaleString("en-US", {maximumFractionDigits: 0}) + " msgs");
-	console.log("Throughput: " + chalk.green.bold(mps.toLocaleString("en-US", {maximumFractionDigits: 0})) + " msgs/sec");
+	console.log(
+		"Messages  : " + received.toLocaleString("en-US", { maximumFractionDigits: 0 }) + " msgs"
+	);
+	console.log(
+		"Throughput: " +
+			kleur.green().bold(mps.toLocaleString("en-US", { maximumFractionDigits: 0 })) +
+			" msgs/sec"
+	);
 	console.log("");
 
 	resolve();
@@ -51,55 +55,58 @@ function createBrokers(transporter) {
 	b2.createService({
 		name: "echo",
 		actions: {
-			reply(ctx) {
+			reply() {
 				received++;
-				if (received >= MAX)
-					done();
+				if (received >= MAX) done();
+			}
+		},
+		events: {
+			"echo.event"() {
+				received++;
+				if (received >= MAX) done();
 			}
 		}
 	});
 
-	return Promise.all([
-		b1.start().then(() => b1.waitForServices("echo")),
-		b2.start()
-	]).delay(1000).then(() => [b1, b2]);
+	return Promise.all([b1.start().then(() => b1.waitForServices("echo")), b2.start()])
+		.delay(1000)
+		.then(() => [b1, b2]);
 }
 
 function measureTP(transporter, dataName) {
 	received = 0;
 
-
-	console.log(chalk.cyan.bold(`'${transporter}' transporter with ${dataName}bytes payload:`));
-	console.log(chalk.cyan.bold("==============================================="));
+	console.log(kleur.cyan().bold(`'${transporter}' transporter with ${dataName}bytes payload:`));
+	console.log(kleur.cyan().bold("==============================================="));
 
 	let data = getDataFile(dataName + ".json");
 	let payload = JSON.parse(data);
 
-	return createBrokers(transporter)
-		.then(([b1, b2]) => {
-			return new Promise(r => {
-				resolve = r;
-				startTime = Date.now();
+	return createBrokers(transporter).then(([b1, b2]) => {
+		//b1.repl();
+		return new Promise(r => {
+			resolve = r;
+			startTime = Date.now();
 
-				for (let i = 0; i < MAX; i++)
-					b1.call("echo.reply", payload).catch(err => console.error(transporter, err.message));
-
-			}).delay(500).then(() => Promise.all([b1.stop(), b2.stop()]));
-		});
+			for (let i = 0; i < MAX; i++) {
+				b2.emit("echo.event", payload);
+				/*b1.call("echo.reply", payload).catch(err =>
+					console.error(transporter, err.message)
+				);*/
+			}
+		})
+			.delay(500)
+			.then(() => Promise.all([b1.stop(), b2.stop()]));
+	});
 }
 
 function runTest(dataName) {
 	return Promise.resolve()
-		.then(() => Promise.map([
-			"Fake",
-			"NATS",
-			"Redis",
-			"MQTT",
-			"TCP"
-		], transporter => measureTP(transporter, dataName), { concurrency: 1}))
+		.then(() =>
+			Promise.mapSeries(["Redis", "AMQP"], transporter => measureTP(transporter, dataName))
+		)
 		.then(() => {
-			if (dataFiles.length > 0)
-				runTest(dataFiles.shift());
+			if (dataFiles.length > 0) runTest(dataFiles.shift());
 		});
 }
 

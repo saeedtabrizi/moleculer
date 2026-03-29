@@ -1,69 +1,137 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2025 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
 "use strict";
-
-const Promise = require("bluebird");
-const _ = require("lodash");
 
 const P = require("./packets");
 const { Packet } = require("./packets");
 const E = require("./errors");
 
 const { Transform } = require("stream");
+const { METRIC } = require("./metrics");
+const C = require("./constants");
+
+/**
+ * @typedef {import("./service-broker")} ServiceBroker
+ * @typedef {import("./transporters/base")} Transporter
+ * @typedef {import("stream").Stream} Stream
+ * @typedef {import("stream").Readable} Readable
+ * @typedef {import("./context")} Context
+ * @typedef {import("./registry").NodeRawInfo} NodeRawInfo
+ * @typedef {import("./transit")} TransitClass
+ * @typedef {import("./packets").PacketDiscoverPayload} PacketDiscoverPayload
+ * @typedef {import("./packets").PacketInfoPayload} PacketInfoPayload
+ * @typedef {import("./packets").PacketRequestPayload} PacketRequestPayload
+ * @typedef {import("./packets").PacketResponsePayload} PacketResponsePayload
+ * @typedef {import("./packets").PacketEventPayload} PacketEventPayload
+ * @typedef {import("./packets").PacketPingPayload} PacketPingPayload
+ * @typedef {import("./packets").PacketPongPayload} PacketPongPayload
+ */
 
 /**
  * Transit class
  *
  * @class Transit
+ * @implements {TransitClass}
  */
 class Transit {
-
 	/**
 	 * Create an instance of Transit.
 	 *
-	 * @param {ServiceBroker} Broker instance
-	 * @param {Transporter} Transporter instance
+	 * @param {ServiceBroker} broker
+	 * @param {Transporter} transporter
 	 * @param {Object?} opts
 	 *
 	 * @memberof Transit
 	 */
 	constructor(broker, transporter, opts) {
 		this.broker = broker;
+		this.Promise = broker.Promise;
 		this.logger = broker.getLogger("transit");
 		this.nodeID = broker.nodeID;
+		this.metrics = broker.metrics;
+		this.instanceID = broker.instanceID;
 		this.tx = transporter;
 		this.opts = opts;
+		this.discoverer = broker.registry.discoverer;
+		this.errorRegenerator = broker.errorRegenerator;
 
 		this.pendingRequests = new Map();
 		this.pendingReqStreams = new Map();
 		this.pendingResStreams = new Map();
 
-		this.stat = {
-			packets: {
-				sent: {
-					count: 0,
-					bytes: 0
-				},
-				received: {
-					count: 0,
-					bytes: 0
-				}
-			}
-		};
-
 		this.connected = false;
 		this.disconnecting = false;
 		this.isReady = false;
 
+		const wrappedMessageHandler = (cmd, packet) => this.messageHandler(cmd, packet);
+
+		this.publish = this.broker.wrapMethod("transitPublish", this.publish, this);
+		this.messageHandler = this.broker.wrapMethod(
+			"transitMessageHandler",
+			this.messageHandler,
+			this
+		);
+
 		if (this.tx) {
-			this.tx.init(this, this.messageHandler.bind(this), this.afterConnect.bind(this));
+			this.tx.init(this, wrappedMessageHandler, this.afterConnect.bind(this));
+
+			this.tx.send = this.broker.wrapMethod("transporterSend", this.tx.send, this.tx);
+			this.tx.receive = this.broker.wrapMethod(
+				"transporterReceive",
+				this.tx.receive,
+				this.tx,
+				{ reverse: true }
+			);
 		}
 
 		this.__connectResolve = null;
+
+		this.registerMoleculerMetrics();
+	}
+
+	/**
+	 * Register Moleculer Transit Core metrics.
+	 */
+	registerMoleculerMetrics() {
+		if (!this.broker.isMetricsEnabled()) return;
+
+		this.metrics
+			.register({
+				name: METRIC.MOLECULER_TRANSIT_READY,
+				type: METRIC.TYPE_GAUGE,
+				description: "Transit is ready"
+			})
+			?.set(0);
+		this.metrics
+			.register({
+				name: METRIC.MOLECULER_TRANSIT_CONNECTED,
+				type: METRIC.TYPE_GAUGE,
+				description: "Transit is connected"
+			})
+			?.set(0);
+
+		this.metrics.register({
+			name: METRIC.MOLECULER_TRANSIT_PONG_TIME,
+			type: METRIC.TYPE_GAUGE,
+			labelNames: ["targetNodeID"],
+			description: "Ping time"
+		});
+		this.metrics.register({
+			name: METRIC.MOLECULER_TRANSIT_PONG_SYSTIME_DIFF,
+			type: METRIC.TYPE_GAUGE,
+			labelNames: ["targetNodeID"],
+			description: "System time difference between nodes"
+		});
+
+		this.metrics.register({
+			name: METRIC.MOLECULER_TRANSIT_ORPHAN_RESPONSE_TOTAL,
+			type: METRIC.TYPE_COUNTER,
+			description: "Number of orphan responses"
+		});
 	}
 
 	/**
@@ -75,23 +143,33 @@ class Transit {
 	 * @memberof Transit
 	 */
 	afterConnect(wasReconnect) {
-		return Promise.resolve()
+		return this.Promise.resolve()
 
 			.then(() => {
-				if (!wasReconnect)
+				if (wasReconnect) {
+					// After reconnecting, we should send a broadcast INFO packet because there may new nodes.
+					// In case of disabled balancer, it triggers the `makeBalancedSubscriptions` method.
+					return this.discoverer.sendLocalNodeInfo();
+				} else {
+					// After connecting we should subscribe to topics
 					return this.makeSubscriptions();
+				}
 			})
 
-			.then(() => this.discoverNodes())
+			.then(() => this.discoverer.discoverAllNodes())
 			.delay(500) // Waiting for incoming INFO packets
 
 			.then(() => {
 				this.connected = true;
+				this.metrics.set(METRIC.MOLECULER_TRANSIT_CONNECTED, 1);
 
-				this.broker.broadcastLocal("$transporter.connected");
+				this.broker.broadcastLocal("$transporter.connected", {
+					wasReconnect: !!wasReconnect
+				});
 
 				if (this.__connectResolve) {
-					this.__connectResolve();
+					this.isReady = true;
+					this.__connectResolve(null);
 					this.__connectResolve = null;
 				}
 
@@ -106,16 +184,21 @@ class Transit {
 	 */
 	connect() {
 		this.logger.info("Connecting to the transporter...");
-		return new Promise(resolve => {
+		return new this.Promise(resolve => {
 			this.__connectResolve = resolve;
 
 			const doConnect = () => {
 				let reconnectStarted = false;
-				const errorHandler = (err) => {
+
+				/* istanbul ignore next */
+				const errorHandler = err => {
 					if (this.disconnecting) return;
 					if (reconnectStarted) return;
 
-					this.logger.warn("Connection is failed.", err && err.message || "Unknown error");
+					this.logger.warn(
+						"Connection is failed.",
+						(err && err.message) || "Unknown error"
+					);
 					this.logger.debug(err);
 
 					if (this.opts.disableReconnect) {
@@ -134,7 +217,6 @@ class Transit {
 			};
 
 			doConnect();
-
 		});
 	}
 
@@ -147,18 +229,16 @@ class Transit {
 		this.connected = false;
 		this.isReady = false;
 		this.disconnecting = true;
+		this.metrics.set(METRIC.MOLECULER_TRANSIT_CONNECTED, 0);
 
 		this.broker.broadcastLocal("$transporter.disconnected", { graceFul: true });
 
-		if (this.tx.connected) {
-			return this.sendDisconnectPacket()
-				.then(() => this.tx.disconnect())
-				.then(() => this.disconnecting = false);
-		}
-
-		this.disconnecting = false;
-		/* istanbul ignore next */
-		return Promise.resolve();
+		return this.Promise.resolve()
+			.then(() => {
+				return this.tx.connected && this.discoverer.localNodeDisconnected();
+			})
+			.then(() => this.tx.disconnect())
+			.then(() => (this.disconnecting = false));
 	}
 
 	/**
@@ -167,8 +247,9 @@ class Transit {
 	 */
 	ready() {
 		if (this.connected) {
-			this.isReady = true;
-			return this.sendNodeInfo();
+			this.metrics.set(METRIC.MOLECULER_TRANSIT_READY, 1);
+			// We do nothing here because INFO packets are sent during the starting process.
+			return;
 		}
 	}
 
@@ -180,7 +261,10 @@ class Transit {
 	 * @memberof Transit
 	 */
 	sendDisconnectPacket() {
-		return this.publish(new Packet(P.PACKET_DISCONNECT)).catch(err => this.logger.debug("Unable to send DISCONNECT packet.", err));
+		return this.publish(new Packet(P.PACKET_DISCONNECT)).catch(
+			/* istanbul ignore next */ err =>
+				this.logger.debug("Unable to send DISCONNECT packet.", err)
+		);
 	}
 
 	/**
@@ -189,41 +273,41 @@ class Transit {
 	 * @memberof Transit
 	 */
 	makeSubscriptions() {
-		this.subscribing = this.tx.makeSubscriptions([
+		this.subscribing = this.tx
+			.makeSubscriptions([
+				// Subscribe to broadcast events
+				{ cmd: P.PACKET_EVENT, nodeID: this.nodeID },
 
-			// Subscribe to broadcast events
-			{ cmd: P.PACKET_EVENT, nodeID: this.nodeID },
+				// Subscribe to requests
+				{ cmd: P.PACKET_REQUEST, nodeID: this.nodeID },
 
-			// Subscribe to requests
-			{ cmd: P.PACKET_REQUEST, nodeID: this.nodeID },
+				// Subscribe to node responses of requests
+				{ cmd: P.PACKET_RESPONSE, nodeID: this.nodeID },
 
-			// Subscribe to node responses of requests
-			{ cmd: P.PACKET_RESPONSE, nodeID: this.nodeID },
+				// Discover handler
+				{ cmd: P.PACKET_DISCOVER },
+				{ cmd: P.PACKET_DISCOVER, nodeID: this.nodeID },
 
-			// Discover handler
-			{ cmd: P.PACKET_DISCOVER },
-			{ cmd: P.PACKET_DISCOVER, nodeID: this.nodeID },
+				// NodeInfo handler
+				{ cmd: P.PACKET_INFO }, // Broadcasted INFO. If a new node connected
+				{ cmd: P.PACKET_INFO, nodeID: this.nodeID }, // Response INFO to DISCOVER packet
 
-			// NodeInfo handler
-			{ cmd: P.PACKET_INFO }, // Broadcasted INFO. If a new node connected
-			{ cmd: P.PACKET_INFO, nodeID: this.nodeID }, // Response INFO to DISCOVER packet
+				// Disconnect handler
+				{ cmd: P.PACKET_DISCONNECT },
 
-			// Disconnect handler
-			{ cmd: P.PACKET_DISCONNECT },
+				// Heartbeat handler
+				{ cmd: P.PACKET_HEARTBEAT },
 
-			// Heartbeat handler
-			{ cmd: P.PACKET_HEARTBEAT },
+				// Ping handler
+				{ cmd: P.PACKET_PING }, // Broadcasted
+				{ cmd: P.PACKET_PING, nodeID: this.nodeID }, // Targeted
 
-			// Ping handler
-			{ cmd: P.PACKET_PING }, // Broadcasted
-			{ cmd: P.PACKET_PING, nodeID: this.nodeID }, // Targeted
-
-			// Pong handler
-			{ cmd: P.PACKET_PONG, nodeID: this.nodeID }
-
-		]).then(() => {
-			this.subscribing = null;
-		});
+				// Pong handler
+				{ cmd: P.PACKET_PONG, nodeID: this.nodeID }
+			])
+			.then(() => {
+				this.subscribing = null;
+			});
 
 		return this.subscribing;
 	}
@@ -231,9 +315,9 @@ class Transit {
 	/**
 	 * Message handler for incoming packets
 	 *
-	 * @param {Array} topic
-	 * @param {String} msg
-	 * @returns {Boolean} If packet is processed return with `true`
+	 * @param {string} cmd
+	 * @param {Packet} packet
+	 * @returns {Promise} If packet is processed resolve with `true` else `false`
 	 *
 	 * @memberof Transit
 	 */
@@ -244,7 +328,11 @@ class Transit {
 			// Check payload
 			if (!payload) {
 				/* istanbul ignore next */
-				throw new E.MoleculerServerError("Missing response payload.", 500, "MISSING_PAYLOAD");
+				throw new E.MoleculerServerError(
+					"Missing response payload.",
+					500,
+					"MISSING_PAYLOAD"
+				);
 			}
 
 			// Check protocol version
@@ -256,296 +344,519 @@ class Transit {
 				});
 			}
 
-			// Skip own packets (if only built-in balancer disabled)
-			if (payload.sender === this.nodeID && (cmd !== P.PACKET_EVENT && cmd !== P.PACKET_REQUEST && cmd !== P.PACKET_RESPONSE))
-				return;
+			if (payload.sender === this.nodeID) {
+				// Detect nodeID conflict
+				if (cmd === P.PACKET_INFO) {
+					if (/** @type {PacketInfoPayload} */ (payload).instanceID !== this.instanceID) {
+						this.broker.fatal(
+							"ServiceBroker has detected a nodeID conflict, use unique nodeIDs. ServiceBroker stopped."
+						);
+						return this.Promise.resolve(false);
+					}
+				}
 
-			// log only if packet type was not disabled by options
-			if (!this.opts.packetLogFilter.includes(cmd)) {
-				this.logger.debug(`Incoming ${cmd} packet from '${payload.sender}'`);
+				// Skip own packets (if only built-in balancer disabled)
+				if (cmd !== P.PACKET_EVENT && cmd !== P.PACKET_REQUEST && cmd !== P.PACKET_RESPONSE)
+					return this.Promise.resolve(false);
 			}
 
 			// Request
 			if (cmd === P.PACKET_REQUEST) {
-				return this._requestHandler(payload);
+				return this.requestHandler(/** @type {PacketRequestPayload} */ (payload)).then(
+					() => true
+				);
 			}
 
 			// Response
 			else if (cmd === P.PACKET_RESPONSE) {
-				this._responseHandler(payload);
+				this.responseHandler(/** @type {PacketResponsePayload} */ (payload));
 			}
 
 			// Event
 			else if (cmd === P.PACKET_EVENT) {
-				this._eventHandler(payload);
+				return this.eventHandler(/** @type {PacketEventPayload} */ (payload));
 			}
 
 			// Discover
 			else if (cmd === P.PACKET_DISCOVER) {
-				this.sendNodeInfo(payload.sender);
+				this.discoverer.sendLocalNodeInfo(payload.sender);
 			}
 
 			// Node info
 			else if (cmd === P.PACKET_INFO) {
-				this.broker.registry.processNodeInfo(payload);
+				this.discoverer.processRemoteNodeInfo(payload.sender, payload);
 			}
 
 			// Disconnect
 			else if (cmd === P.PACKET_DISCONNECT) {
-				this.broker.registry.nodeDisconnected(payload);
+				this.discoverer.remoteNodeDisconnected(payload.sender, false);
 			}
 
 			// Heartbeat
 			else if (cmd === P.PACKET_HEARTBEAT) {
-				this.broker.registry.nodeHeartbeat(payload);
+				this.discoverer.heartbeatReceived(payload.sender, payload);
 			}
 
 			// Ping
 			else if (cmd === P.PACKET_PING) {
-				this.sendPong(payload);
+				this.sendPong(/** @type {PacketPingPayload} */ (payload));
 			}
 
 			// Pong
 			else if (cmd === P.PACKET_PONG) {
-				this.processPong(payload);
+				this.processPong(/** @type {PacketPongPayload} */ (payload));
 			}
 
-			return true;
+			return this.Promise.resolve(true);
 		} catch (err) {
 			this.logger.error(err, cmd, packet);
+
+			this.broker.broadcastLocal("$transit.error", {
+				error: err,
+				module: "transit",
+				type: C.FAILED_PROCESSING_PACKET
+			});
 		}
-		return false;
+		return this.Promise.resolve(false);
 	}
 
 	/**
 	 * Handle incoming event
 	 *
-	 * @param {any} payload
+	 * @param {PacketEventPayload} payload
+	 * @returns {Promise<boolean>}
 	 * @memberof Transit
 	 */
-	_eventHandler(payload) {
-		this.logger.debug(`Event '${payload.event}' received from '${payload.sender}' node` + (payload.groups ? ` in '${payload.groups.join(", ")}' group(s)` : "") + ".");
+	eventHandler(payload) {
+		this.logger.debug(
+			`Event '${payload.event}' received from '${payload.sender}' node` +
+				(payload.groups ? ` in '${payload.groups.join(", ")}' group(s)` : "") +
+				"."
+		);
 
-		if (!this.broker.started) {
-			this.logger.warn(`Incoming '${payload.event}' event from '${payload.sender}' node is dropped, because broker is stopped.`);
+		if (this.broker.stopping) {
+			this.logger.warn(
+				`Incoming '${payload.event}' event from '${payload.sender}' node is dropped, because broker is stopped.`
+			);
+			// return false so the transporter knows this event wasn't handled.
+			return this.Promise.resolve(false);
 		}
 
-		this.broker.emitLocalServices(payload.event, payload.data, payload.groups, payload.sender, payload.broadcast);
+		// Create caller context
+		const ctx = new this.broker.ContextFactory(this.broker);
+		ctx.id = payload.id;
+		ctx.eventName = payload.event;
+		ctx.setParams(payload.data, this.broker.options.contextParamsCloning);
+		ctx.eventGroups = payload.groups;
+		ctx.eventType = payload.broadcast ? "broadcast" : "emit";
+		ctx.meta = payload.meta || {};
+		ctx.headers = payload.headers || {};
+		ctx.level = payload.level;
+		ctx.tracing = !!payload.tracing;
+		ctx.parentID = payload.parentID;
+		ctx.requestID = payload.requestID;
+		ctx.caller = payload.caller;
+		ctx.nodeID = payload.sender;
+
+		// ensure the eventHandler resolves true when the event was handled successfully
+		return this.broker
+			.emitLocalServices(ctx)
+			.then(() => true)
+			.catch(err => {
+				this.logger.error(err);
+
+				return false;
+			});
 	}
 
 	/**
 	 * Handle incoming request
 	 *
-	 * @param {Object} payload
-	 *
+	 * @param {PacketRequestPayload} payload
+	 * @returns {Promise<any>}
 	 * @memberof Transit
 	 */
-	_requestHandler(payload) {
-		this.logger.debug(`Request '${payload.action}' received from '${payload.sender}' node.`);
+	requestHandler(payload) {
+		const requestID = payload.requestID ? "with requestID '" + payload.requestID + "' " : "";
+		this.logger.debug(
+			`<= Request '${payload.action}' ${requestID}received from '${payload.sender}' node.`
+		);
 
 		try {
-			if (!this.broker.started) {
-				this.logger.warn(`Incoming '${payload.action}' request from '${payload.sender}' node is dropped, because broker is stopped.`);
-				throw new E.ServiceNotAvailableError({ action: payload.action, nodeID: this.nodeID });
+			if (this.broker.stopping) {
+				this.logger.warn(
+					`Incoming '${payload.action}' ${requestID}request from '${payload.sender}' node is dropped because broker is stopped.`
+				);
+				throw new E.ServiceNotAvailableError({
+					action: payload.action,
+					nodeID: this.nodeID
+				});
 			}
 
-			let pass;
+			let stream;
 			if (payload.stream !== undefined) {
-				pass = this.pendingReqStreams.get(payload.id);
-				if (pass) {
-					if (!payload.stream) {
-
-						// Check stream error
-						if (payload.meta["$streamError"]) {
-							pass.emit("error", this._createErrFromPayload(payload.meta["$streamError"], payload.sender));
-						}
-
-						this.logger.debug(`Stream closing is received from '${payload.sender}'.`);
-
-						// End of stream
-						pass.end();
-
-						// Remove pending request
-						this.removePendingRequest(payload.id);
-
-						return;
-
-					} else {
-						this.logger.debug(`Stream chunk is received from '${payload.sender}'.`);
-						// stream chunk received
-						pass.write(payload.params.type === "Buffer" ? new Buffer.from(payload.params.data) : payload.params);
-
-						return;
-					}
-
-				} else if (payload.stream) {
-					this.logger.debug(`New stream is received from '${payload.sender}'.`);
-
-					// Create a new pass stream
-					pass = new Transform({
-						transform: function(chunk, encoding, done) {
-							this.push(chunk);
-							return done();
-						}
-					});
-					this.pendingReqStreams.set(payload.id, pass);
-				}
+				stream = this._handleIncomingRequestStream(payload);
+				if (stream === null) return this.Promise.resolve();
 			}
 
 			const endpoint = this.broker._getLocalActionEndpoint(payload.action);
 
 			// Recreate caller context
-			const ctx = new this.broker.ContextFactory(this.broker, endpoint);
+			const ctx = new this.broker.ContextFactory(this.broker);
+			ctx.setEndpoint(endpoint);
 			ctx.id = payload.id;
-			ctx.setParams(pass ? pass : payload.params);
+			ctx.setParams(payload.params, this.broker.options.contextParamsCloning);
+			if (stream) {
+				ctx.stream = stream;
+			}
 			ctx.parentID = payload.parentID;
 			ctx.requestID = payload.requestID;
+			ctx.caller = payload.caller;
 			ctx.meta = payload.meta || {};
+			ctx.headers = payload.headers || {};
 			ctx.level = payload.level;
-			ctx.metrics = !!payload.metrics;
+			ctx.tracing = payload.tracing;
 			ctx.nodeID = payload.sender;
 
-			ctx.options.timeout = payload.timeout || this.broker.options.requestTimeout || 0;
+			if (payload.timeout != null) ctx.options.timeout = payload.timeout;
 
 			const p = endpoint.action.handler(ctx);
 			// Pointer to Context
 			p.ctx = ctx;
 
 			return p
-				.then(res => this.sendResponse(payload.sender, payload.id, ctx.meta, res, null))
-				.catch(err => this.sendResponse(payload.sender, payload.id, ctx.meta, null, err));
-
+				.then(res =>
+					this.sendResponse(
+						payload.sender,
+						payload.id,
+						ctx.meta,
+						ctx.responseHeaders,
+						res,
+						null
+					)
+				)
+				.catch(err =>
+					this.sendResponse(
+						payload.sender,
+						payload.id,
+						ctx.meta,
+						ctx.responseHeaders,
+						null,
+						err
+					)
+				);
 		} catch (err) {
-			return this.sendResponse(payload.sender, payload.id, payload.meta, null, err);
+			return this.sendResponse(payload.sender, payload.id, payload.meta, null, null, err);
 		}
 	}
 
-	_createErrFromPayload(error, sender) {
-		let err = E.recreateError(error);
-		if (!err) {
-			err = new Error(error.message);
-			err.name = error.name;
-			err.code = error.code;
-			err.type = error.type;
-			err.data = error.data;
+	/**
+	 * Handle incoming request stream.
+	 *
+	 * @param {Object} payload
+	 * @returns {Stream|false|null}
+	 */
+	_handleIncomingRequestStream(payload) {
+		const reqStream = this.pendingReqStreams.get(payload.id);
+		let stream = reqStream ? reqStream.stream : undefined;
+
+		if (!payload.stream && !stream && !payload.seq) {
+			// It is not a stream data
+			return false;
 		}
-		err.retryable = error.retryable;
-		err.nodeID = error.nodeID || sender;
 
-		if (error.stack)
-			err.stack = error.stack;
+		if (!stream) {
+			this.logger.debug(
+				`<= New stream is received from '${payload.sender}'. Seq: ${payload.seq}`
+			);
 
-		return err;
+			// Create a new pass stream
+			stream = new Transform({
+				// TODO: It's incorrect because the chunks may receive in random order, so it processes an empty meta.
+				// Meta is filled correctly only in the 0. chunk.
+				objectMode: payload.headers?.$streamObjectMode,
+				transform: function (chunk, encoding, done) {
+					this.push(chunk);
+					return done();
+				}
+			});
+
+			delete payload.headers?.$streamObjectMode;
+
+			stream.$prevSeq = -1;
+			stream.$pool = new Map();
+
+			this.pendingReqStreams.set(payload.id, { sender: payload.sender, stream });
+
+			stream.on("moleculer-timeout-middleware", timeout => {
+				setTimeout(() => {
+					this.pendingReqStreams.delete(payload.id);
+					this._destroyStreamIfPossible(
+						stream,
+						`Pending request stream ${payload.id} have been closed by timeout ${timeout} ms`
+					);
+				}, 1000);
+			});
+		}
+
+		if (payload.seq > stream.$prevSeq + 1) {
+			// Some chunks are late. Store these chunks.
+			this.logger.debug(
+				`Put the chunk into pool (size: ${stream.$pool.size}). Seq: ${payload.seq}`
+			);
+
+			stream.$pool.set(payload.seq, payload);
+
+			// TODO: start timer.
+			// TODO: check length of pool.
+			// TODO: reset seq
+
+			return null;
+		}
+
+		// the next stream chunk received
+		stream.$prevSeq = payload.seq;
+
+		if (stream.$prevSeq > 0) {
+			if (!payload.stream) {
+				// Check stream error
+				if (payload.headers?.$streamError) {
+					stream.emit(
+						"error",
+						this._createErrFromPayload(payload.headers.$streamError, payload)
+					);
+					delete payload.headers.$streamError;
+				}
+
+				this.logger.debug(
+					`<= Stream closing is received from '${payload.sender}'. Seq: ${payload.seq}`
+				);
+
+				// End of stream
+				stream.end();
+
+				// Remove pending request stream
+				this.pendingReqStreams.delete(payload.id);
+
+				return null;
+			} else {
+				this.logger.debug(
+					`<= Stream chunk is received from '${payload.sender}'. Seq: ${payload.seq}`
+				);
+				stream.write(
+					payload.params?.type === "Buffer"
+						? Buffer.from(payload.params.data)
+						: payload.params
+				);
+			}
+		}
+
+		// Check newer chunks in the pool
+		if (stream.$pool.size > 0) {
+			this.logger.debug(`Has stored packets. Size: ${stream.$pool.size}`);
+			const nextSeq = stream.$prevSeq + 1;
+			const nextPacket = stream.$pool.get(nextSeq);
+			if (nextPacket) {
+				stream.$pool.delete(nextSeq);
+				setImmediate(() => this.requestHandler(nextPacket));
+			}
+		}
+
+		return stream && payload.seq === 0 ? stream : null;
+	}
+
+	/**
+	 * Create an Error instance from payload ata
+	 * @param {Object} error
+	 * @param {Object} payload
+	 * @returns {Error}
+	 */
+	_createErrFromPayload(error, payload) {
+		return this.errorRegenerator?.restore(error, payload);
 	}
 
 	/**
 	 * Process incoming response of request
 	 *
-	 * @param {Object} packet
+	 * @param {PacketResponsePayload} packet
 	 *
 	 * @memberof Transit
 	 */
-	_responseHandler(packet) {
+	responseHandler(packet) {
 		const id = packet.id;
 		const req = this.pendingRequests.get(id);
 
 		// If not exists (timed out), we skip response processing
 		if (req == null) {
-			this.logger.debug("Orphan response is received. Maybe the request is timed out earlier. ID:", packet.id, ", Sender:", packet.sender);
+			this.logger.debug(
+				"Orphan response is received. Maybe the request is timed out earlier. ID:",
+				packet.id,
+				", Sender:",
+				packet.sender
+			);
+			this.metrics.increment(METRIC.MOLECULER_TRANSIT_ORPHAN_RESPONSE_TOTAL);
 			return;
 		}
 
-		this.logger.debug(`Response '${req.action.name}' is received from '${packet.sender}'.`);
+		this.logger.debug(`<= Response '${req.action.name}' is received from '${packet.sender}'.`);
 
 		// Update nodeID in context (if it uses external balancer)
 		req.ctx.nodeID = packet.sender;
 
 		// Merge response meta with original meta
-		_.assign(req.ctx.meta, packet.meta);
+		Object.assign(req.ctx.meta || {}, packet.meta || {});
 
-		// Handle stream repose
+		// Handle stream response
 		if (packet.stream != null) {
-			//get the underlined stream for id
-			let pass = this.pendingResStreams.get(id);
-			if (pass) {
-				if (!packet.stream) {
-					// Received error?
-					if (!packet.success)
-						pass.emit("error", this._createErrFromPayload(packet.error, packet.sender));
-
-					this.logger.debug(`Stream closing is received from '${packet.sender}'`);
-
-					// End of stream
-					pass.end();
-
-					// Remove pending request
-					this.removePendingRequest(id);
-
-				} else {
-					// stream chunk
-					this.logger.debug(`Stream chunk is received from '${packet.sender}'`);
-					pass.write(packet.data.type === "Buffer" ? new Buffer.from(packet.data.data) : packet.data);
-				}
-				return req.resolve(packet.data);
-
-			} else if (packet.stream) {
-				// Create a new pass stream
-				this.logger.debug(`New stream is received from '${packet.sender}'`);
-
-				pass = new Transform({
-					transform: function(chunk, encoding, done) {
-						this.push(chunk);
-						return done();
-					}
-				});
-				this.pendingResStreams.set(id, pass);
-				return req.resolve(pass);
-			}
+			if (this._handleIncomingResponseStream(packet, req)) return;
 		}
 
 		// Remove pending request
 		this.removePendingRequest(id);
 
 		if (!packet.success) {
-			req.reject(this._createErrFromPayload(packet.error, packet.sender));
+			req.reject(this._createErrFromPayload(packet.error, packet));
 		} else {
 			req.resolve(packet.data);
 		}
 	}
 
 	/**
+	 * Handle incoming response stream.
+	 *
+	 * @param {Object} packet
+	 * @param {Object} req
+	 */
+	_handleIncomingResponseStream(packet, req) {
+		let stream = this.pendingResStreams.get(packet.id);
+		if (!stream && !packet.stream && !packet.seq) return false;
+
+		if (!stream) {
+			this.logger.debug(
+				`<= New stream is received from '${packet.sender}'. Seq: ${packet.seq}`
+			);
+
+			stream = new Transform({
+				// TODO: It's incorrect because the chunks may receive in random order, so it processes an empty meta.
+				// Meta is filled correctly only in the 0. chunk.
+				objectMode: packet.headers?.$streamObjectMode,
+				transform: function (chunk, encoding, done) {
+					this.push(chunk);
+					return done();
+				}
+			});
+
+			delete packet.headers?.$streamObjectMode;
+
+			stream.$prevSeq = -1;
+			stream.$pool = new Map();
+
+			this.pendingResStreams.set(packet.id, stream);
+		}
+
+		if (packet.seq > stream.$prevSeq + 1) {
+			// Some chunks are late. Store these chunks.
+			this.logger.debug(
+				`Put the chunk into pool (size: ${stream.$pool.size}). Seq: ${packet.seq}`
+			);
+
+			stream.$pool.set(packet.seq, packet);
+
+			// TODO: start timer.
+			// TODO: check length of pool.
+			// TODO: resetting seq.
+
+			return true;
+		}
+
+		// the next stream chunk received
+		stream.$prevSeq = packet.seq;
+
+		if (stream && packet.seq === 0) {
+			req.resolve(stream);
+		}
+
+		if (stream.$prevSeq > 0) {
+			if (!packet.stream) {
+				// Received error?
+				if (!packet.success)
+					stream.emit("error", this._createErrFromPayload(packet.error, packet));
+
+				this.logger.debug(
+					`<= Stream closing is received from '${packet.sender}'. Seq: ${packet.seq}`
+				);
+
+				// End of stream
+				stream.end();
+
+				// Remove pending request
+				this.removePendingRequest(packet.id);
+
+				return true;
+			} else {
+				// stream chunk
+				this.logger.debug(
+					`<= Stream chunk is received from '${packet.sender}'. Seq: ${packet.seq}`
+				);
+				stream.write(
+					packet.data?.type === "Buffer" ? Buffer.from(packet.data.data) : packet.data
+				);
+			}
+		}
+
+		// Check newer chunks in the pool
+		if (stream.$pool.size > 0) {
+			this.logger.debug(`Has stored packets. Size: ${stream.$pool.size}`);
+			const nextSeq = stream.$prevSeq + 1;
+			const nextPacket = stream.$pool.get(nextSeq);
+			if (nextPacket) {
+				stream.$pool.delete(nextSeq);
+				setImmediate(() => this.responseHandler(nextPacket));
+			}
+		}
+
+		return true;
+	}
+
+	/**
 	 * Send a request to a remote service. It returns a Promise
 	 * what will be resolved when the response received.
 	 *
-	 * @param {<Context>} ctx            Context of request
-	 * @returns    {Promise}
+	 * @param {Context} ctx Context of request
+	 * @returns {Promise}
 	 *
 	 * @memberof Transit
 	 */
 	request(ctx) {
-		if (this.opts.maxQueueSize && this.pendingRequests.size > this.opts.maxQueueSize)
-			return Promise.reject(new E.QueueIsFullError({
-				action: ctx.action.name,
-				nodeID: this.nodeID,
-				size: this.pendingRequests.length,
-				limit: this.opts.maxQueueSize
-			}));
+		if (this.opts.maxQueueSize && this.pendingRequests.size >= this.opts.maxQueueSize)
+			/* istanbul ignore next */
+			return this.Promise.reject(
+				new E.QueueIsFullError({
+					action: ctx.action.name,
+					nodeID: this.nodeID,
+					size: this.pendingRequests.size,
+					limit: this.opts.maxQueueSize
+				})
+			);
 
 		// Expanded the code that v8 can optimize it.  (TryCatchStatement disable optimizing)
-		return new Promise((resolve, reject) => this._sendRequest(ctx, resolve, reject));
+		return new this.Promise((resolve, reject) => this._sendRequest(ctx, resolve, reject));
 	}
 
 	/**
 	 * Send a remote request
 	 *
-	 * @param {<Context>} ctx        Context of request
-	 * @param {Function} resolve    Resolve of Promise
+	 * @param {Context} ctx      Context of request
+	 * @param {Function} resolve   Resolve of Promise
 	 * @param {Function} reject    Reject of Promise
 	 *
 	 * @memberof Transit
 	 */
 	_sendRequest(ctx, resolve, reject) {
-		const isStream = ctx.params && ctx.params.readable === true && typeof ctx.params.on === "function" && typeof ctx.params.pipe === "function";
+		const isStream =
+			ctx.options?.stream?.readable === true &&
+			typeof ctx.options.stream.on === "function" &&
+			typeof ctx.options.stream.pipe === "function";
 
 		const request = {
 			action: ctx.action,
@@ -553,74 +864,146 @@ class Transit {
 			ctx,
 			resolve,
 			reject,
-			stream: isStream // ???
+			stream: isStream
 		};
 
 		const payload = {
 			id: ctx.id,
-			action: ctx.action.name,
-			params: isStream ? null : ctx.params,
+			action: ctx.action?.name,
+			params: ctx.params,
 			meta: ctx.meta,
+			headers: ctx.headers,
 			timeout: ctx.options.timeout,
 			level: ctx.level,
-			metrics: ctx.metrics,
+			tracing: ctx.tracing,
 			parentID: ctx.parentID,
 			requestID: ctx.requestID,
+			caller: ctx.caller,
 			stream: isStream
 		};
+
+		if (isStream) {
+			/** @type {Readable} */
+			const s = ctx.options.stream;
+			if (s.readableObjectMode === true) {
+				payload.headers = payload.headers ?? {};
+				payload.headers.$streamObjectMode = true;
+			}
+			payload.seq = 0;
+		}
 
 		const packet = new Packet(P.PACKET_REQUEST, ctx.nodeID, payload);
 
 		const nodeName = ctx.nodeID ? `'${ctx.nodeID}'` : "someone";
-		this.logger.debug(`Send '${ctx.action.name}' request to ${nodeName} node.`);
+		const requestID = ctx.requestID ? "with requestID '" + ctx.requestID + "' " : "";
+		this.logger.debug(`=> Send '${ctx.action?.name}' request ${requestID}to ${nodeName} node.`);
 
-		const publishCatch = err => this.logger.error(`Unable to send '${ctx.action.name}' request to ${nodeName} node.`, err);
+		const publishCatch = /* istanbul ignore next */ err => {
+			this.logger.error(
+				`Unable to send '${ctx.action?.name}' request ${requestID}to ${nodeName} node.`,
+				err
+			);
+
+			this.broker.broadcastLocal("$transit.error", {
+				error: err,
+				module: "transit",
+				type: C.FAILED_SEND_REQUEST_PACKET
+			});
+		};
 
 		// Add to pendings
 		this.pendingRequests.set(ctx.id, request);
 
+		if (isStream) {
+			const pass = ctx.options.stream;
+
+			pass.on("moleculer-timeout-middleware", timeout => {
+				this._destroyStreamIfPossible(
+					pass,
+					`Request stream ${ctx.id} have been closed by timeout ${timeout} ms`
+				);
+			});
+		}
+
 		// Publish request
-		this.publish(packet)
+		return this.publish(packet)
 			.then(() => {
 				if (isStream) {
-					// Skip to send ctx.meta with chunks because it doesn't appear on the remote side.
+					const { stream } = ctx.options;
+
+					// Skip to send ctx.meta after the first packet because it doesn't appear on the remote side.
 					payload.meta = {};
+					// Still send information about objectMode in case of packets are received in wrong order
+					if (stream.readableObjectMode === true) {
+						payload.headers = payload.headers ?? {};
+						payload.headers.$streamObjectMode = true;
+					}
 
-					const stream = ctx.params;
 					stream.on("data", chunk => {
-						const copy = Object.assign({}, payload);
-						copy.stream = true;
-						copy.params = chunk;
 						stream.pause();
+						const chunks = [];
+						if (
+							chunk instanceof Buffer &&
+							this.opts.maxChunkSize > 0 &&
+							chunk.length > this.opts.maxChunkSize
+						) {
+							let len = chunk.length;
+							let i = 0;
+							while (i < len) {
+								chunks.push(chunk.subarray(i, (i += this.opts.maxChunkSize)));
+							}
+						} else {
+							chunks.push(chunk);
+						}
 
-						this.logger.debug(`Send stream chunk to ${nodeName} node.`);
+						return this.Promise.all(
+							chunks.map(ch => {
+								const copy = Object.assign({}, payload);
+								copy.seq = ++payload.seq;
+								copy.stream = true;
+								copy.params = ch;
 
-						return this.publish(new Packet(P.PACKET_REQUEST, ctx.nodeID, copy))
+								this.logger.debug(
+									`=> Send stream chunk ${requestID}to ${nodeName} node. Seq: ${copy.seq}`
+								);
+
+								return this.publish(new Packet(P.PACKET_REQUEST, ctx.nodeID, copy));
+							})
+						)
 							.then(() => stream.resume())
 							.catch(publishCatch);
 					});
 
 					stream.on("end", () => {
 						const copy = Object.assign({}, payload);
+						copy.seq = ++payload.seq;
 						copy.params = null;
 						copy.stream = false;
 
-						this.logger.debug(`Send stream ending to ${nodeName} node.`);
+						this.logger.debug(
+							`=> Send stream closing ${requestID}to ${nodeName} node. Seq: ${copy.seq}`
+						);
 
-						return this.publish(new Packet(P.PACKET_REQUEST, ctx.nodeID, copy))
-							.catch(publishCatch);
+						return this.publish(new Packet(P.PACKET_REQUEST, ctx.nodeID, copy)).catch(
+							publishCatch
+						);
 					});
 
 					stream.on("error", err => {
 						const copy = Object.assign({}, payload);
+						copy.seq = ++payload.seq;
 						copy.stream = false;
-						copy.meta["$streamError"] = this._createPayloadErrorField(err);
+						copy.headers.$streamError = this._createPayloadErrorField(err, payload);
 						copy.params = null;
 
-						this.logger.debug(`Send stream error to ${nodeName} node.`, copy.meta["$streamError"]);
+						this.logger.debug(
+							`=> Send stream error ${requestID}to ${nodeName} node.`,
+							copy.headers.$streamError
+						);
 
-						return this.publish(new Packet(P.PACKET_REQUEST, ctx.nodeID, copy))
-							.catch(publishCatch);
+						return this.publish(new Packet(P.PACKET_REQUEST, ctx.nodeID, copy)).catch(
+							publishCatch
+						);
 					});
 				}
 			})
@@ -631,72 +1014,65 @@ class Transit {
 	}
 
 	/**
-	 * Send a broadcast event to a remote node
-	 *
-	 * @param {String} nodeID
-	 * @param {String} event
-	 * @param {any} data
-	 *
-	 * @memberof Transit
-	 */
-	sendBroadcastEvent(nodeID, event, data, groups) {
-		this.logger.debug(`Send '${event}' event to '${nodeID}' node` + (groups ? ` in '${groups.join(", ")}' group(s)` : "") + ".");
-
-		this.publish(new Packet(P.PACKET_EVENT, nodeID, {
-			event,
-			data,
-			groups,
-			broadcast: true
-		})).catch(err => this.logger.error(`Unable to send '${event}' broadcast event to '${nodeID}' node.`, err));
-	}
-
-	/**
-	 * Send a grouped event to remote nodes.
-	 * The event is balanced internally.
-	 *
-	 * @param {String} event
-	 * @param {any} data
-	 * @param {Object} nodeGroups
-	 *
-	 * @memberof Transit
-	 */
-	sendBalancedEvent(event, data, nodeGroups) {
-		_.forIn(nodeGroups, (groups, nodeID) => {
-			this.logger.debug(`Send '${event}' event to '${nodeID}' node` + (groups ? ` in '${groups.join(", ")}' group(s)` : "") + ".");
-
-			this.publish(new Packet(P.PACKET_EVENT, nodeID, {
-				event,
-				data,
-				groups,
-				broadcast: false
-			})).catch(err => this.logger.error(`Unable to send '${event}' event to '${nodeID}' node.`, err));
-		});
-	}
-
-	/**
-	 * Send an event to groups.
+	 * Send an event to a remote node.
 	 * The event is balanced by transporter
 	 *
-	 * @param {String} event
-	 * @param {any} data
-	 * @param {Object} groups
+	 * @param {Context} ctx
 	 *
 	 * @memberof Transit
 	 */
-	sendEventToGroups(event, data, groups) {
-		this.logger.debug(`Send '${event}' event to '${groups.join(", ")}' group(s).`);
-		this.publish(new Packet(P.PACKET_EVENT, null, {
-			event,
-			data,
-			groups,
-			broadcast: false
-		})).catch(err => this.logger.error(`Unable to send '${event}' event to groups.`, err));
+	sendEvent(ctx) {
+		const groups = ctx.eventGroups;
+		const requestID = ctx.requestID ? "with requestID '" + ctx.requestID + "' " : "";
+		if (ctx.endpoint)
+			this.logger.debug(
+				`=> Send '${ctx.eventName}' event ${requestID}to '${ctx.nodeID}' node` +
+					(groups ? ` in '${groups.join(", ")}' group(s)` : "") +
+					"."
+			);
+		else
+			this.logger.debug(
+				`=> Send '${ctx.eventName}' event ${requestID}to '${groups?.join(", ")}' group(s).`
+			);
+
+		return this.publish(
+			new Packet(P.PACKET_EVENT, ctx.endpoint ? ctx.nodeID : null, {
+				id: ctx.id,
+				event: ctx.eventName,
+				data: ctx.params,
+				groups,
+				broadcast: ctx.eventType == "broadcast",
+				meta: ctx.meta,
+				headers: ctx.headers,
+				level: ctx.level,
+				tracing: ctx.tracing,
+				parentID: ctx.parentID,
+				requestID: ctx.requestID,
+				caller: ctx.caller,
+				needAck: ctx.needAck
+			})
+		).catch(
+			/* istanbul ignore next */ err => {
+				this.logger.error(
+					`Unable to send '${ctx.eventName}' event ${requestID}to groups.`,
+					err
+				);
+
+				this.broker.broadcastLocal("$transit.error", {
+					error: err,
+					module: "transit",
+					type: C.FAILED_SEND_EVENT_PACKET
+				});
+
+				return Promise.reject(err);
+			}
+		);
 	}
 
 	/**
 	 * Remove a pending request
 	 *
-	 * @param {any} id
+	 * @param {String} id
 	 *
 	 * @memberof Transit
 	 */
@@ -716,40 +1092,95 @@ class Transit {
 	 */
 	removePendingRequestByNodeID(nodeID) {
 		this.logger.debug(`Remove pending requests of '${nodeID}' node.`);
+
+		// Close pending request streams of the node
+		this.pendingReqStreams.forEach(({ sender, stream }, id) => {
+			if (sender === nodeID) {
+				this.pendingReqStreams.delete(id);
+				this._destroyStreamIfPossible(stream, `Stream closed by ${nodeID}`);
+			}
+		});
+
 		this.pendingRequests.forEach((req, id) => {
 			if (req.nodeID === nodeID) {
 				this.pendingRequests.delete(id);
 
 				// Reject the request
-				req.reject(new E.RequestRejectedError({
-					action: req.action.name,
-					nodeID: req.nodeID
-				}));
+				req.reject(
+					new E.RequestRejectedError({
+						action: req.action.name,
+						nodeID: req.nodeID
+					})
+				);
 
-				this.pendingReqStreams.delete(id);
-				this.pendingResStreams.delete(id);
+				this._deletePendingReqStream(id, nodeID);
+				this._deletePendingResStream(id, nodeID);
 			}
 		});
+	}
+
+	/**
+	 * Internal method to delete a pending response stream from `pendingResStreams`
+	 * and destroy it (if not already destroyed) with error.
+	 *
+	 * @param {String} id ID of the stream in `pendingResStreams`
+	 * @param {String} origin NodeID of the origin of the destroy request
+	 *
+	 * @memberof Transit
+	 */
+	_deletePendingResStream(id, origin) {
+		const stream = this.pendingResStreams.get(id);
+		this.pendingResStreams.delete(id);
+
+		if (stream) {
+			this._destroyStreamIfPossible(stream, `Stream closed by ${origin}`);
+		}
+	}
+
+	/**
+	 * Internal method to delete a pending request stream from `pendingReqStreams`
+	 * and destroy it (if not already ended) with error.
+	 *
+	 * @param {String} id ID of the stream in `pendingReqStreams`
+	 * @param {String} origin NodeID of the origin of the destroy request
+	 *
+	 * @memberof Transit
+	 */
+	_deletePendingReqStream(id, origin) {
+		const reqStream = this.pendingReqStreams.get(id);
+		const pass = reqStream ? reqStream.stream : undefined;
+		this.pendingReqStreams.delete(id);
+
+		if (pass) {
+			this._destroyStreamIfPossible(pass, `Stream closed by ${origin}`);
+		}
+	}
+
+	/**
+	 * Internal method to destroy a stream if it is not already destroyed.
+	 *
+	 * @param {DuplexStream} stream - The stream to be destroyed.
+	 * @param {String} errorMessage - The error message to be used when destroying.
+	 *
+	 * @memberof Transit
+	 */
+	_destroyStreamIfPossible(stream, errorMessage) {
+		if (!stream.destroyed && stream.destroy) {
+			stream.on("error", err => this.logger.error(err.message));
+			stream.destroy(new Error(errorMessage));
+		}
 	}
 
 	/**
 	 * Create error field in outgoing payload
 	 *
 	 * @param {Error} err
+	 * @param {Object} payload
 	 * @returns {Object}
 	 * @memberof Transit
 	 */
-	_createPayloadErrorField(err) {
-		return {
-			name: err.name,
-			message: err.message,
-			nodeID: err.nodeID || this.nodeID,
-			code: err.code,
-			type: err.type,
-			retryable: err.retryable,
-			stack: err.stack,
-			data: err.data
-		};
+	_createPayloadErrorField(err, payload) {
+		return this.errorRegenerator?.extractPlainError(err, payload);
 	}
 
 	/**
@@ -757,82 +1188,125 @@ class Transit {
 	 *
 	 * @param {String} nodeID
 	 * @param {String} id
-	 * @param {any} meta
+	 * @param {Object} meta
+	 * @param {Object} headers
 	 * @param {any} data
-	 * @param {Error} err
+	 * @param {Error?} err
 	 *
 	 * @memberof Transit
 	 */
-	sendResponse(nodeID, id, meta, data, err) {
+	sendResponse(nodeID, id, meta, headers, data, err) {
 		// Publish the response
 		const payload = {
 			id: id,
 			meta: meta,
+			headers,
 			success: err == null,
 			data: data
 		};
 
-		if (err)
-			payload.error = this._createPayloadErrorField(err);
+		if (err) payload.error = this._createPayloadErrorField(err, payload);
 
-		const publishCatch = err => this.logger.error(`Unable to send '${id}' response to '${nodeID}' node.`, err);
+		const publishCatch = /* istanbul ignore next */ err => {
+			this.logger.error(`Unable to send '${id}' response to '${nodeID}' node.`, err);
 
-		if (data && data.readable === true && typeof data.on === "function" && typeof data.pipe === "function") {
+			this.broker.broadcastLocal("$transit.error", {
+				error: err,
+				module: "transit",
+				type: C.FAILED_SEND_RESPONSE_PACKET
+			});
+		};
+
+		if (
+			data &&
+			data.readable === true &&
+			typeof data.on === "function" &&
+			typeof data.pipe === "function"
+		) {
 			// Streaming response
 			payload.stream = true;
+			if (data.readableObjectMode === true || data._readableState?.objectMode === true) {
+				payload.headers = payload.headers || {};
+				payload.headers.$streamObjectMode = true;
+			}
+			payload.seq = 0;
+
 			const stream = data;
 			stream.pause();
 
 			stream.on("data", chunk => {
-				const copy = Object.assign({}, payload);
-				copy.stream = true;
-				copy.data = chunk;
 				stream.pause();
+				const chunks = [];
+				if (
+					chunk instanceof Buffer &&
+					this.opts.maxChunkSize > 0 &&
+					chunk.length > this.opts.maxChunkSize
+				) {
+					let len = chunk.length;
+					let i = 0;
+					while (i < len) {
+						chunks.push(chunk.subarray(i, (i += this.opts.maxChunkSize)));
+					}
+				} else {
+					chunks.push(chunk);
+				}
 
-				this.logger.debug(`Send stream chunk to ${nodeID} node.`);
+				return this.Promise.all(
+					chunks.map(ch => {
+						const copy = Object.assign({}, payload);
+						copy.seq = ++payload.seq;
+						copy.stream = true;
+						copy.data = ch;
 
-				return this.publish(new Packet(P.PACKET_RESPONSE, nodeID, copy))
+						this.logger.debug(
+							`=> Send stream chunk to ${nodeID} node. Seq: ${copy.seq}`
+						);
+
+						return this.publish(new Packet(P.PACKET_RESPONSE, nodeID, copy));
+					})
+				)
 					.then(() => stream.resume())
 					.catch(publishCatch);
 			});
 
 			stream.on("end", () => {
 				const copy = Object.assign({}, payload);
-				copy.data = null;
 				copy.stream = false;
+				copy.seq = ++payload.seq;
+				copy.data = null;
 
-				this.logger.debug(`Send stream ending to ${nodeID} node.`);
+				this.logger.debug(`=> Send stream closing to ${nodeID} node. Seq: ${copy.seq}`);
 
-				return this.publish(new Packet(P.PACKET_RESPONSE, nodeID, copy))
-					.catch(publishCatch);
+				return this.publish(new Packet(P.PACKET_RESPONSE, nodeID, copy)).catch(
+					publishCatch
+				);
 			});
 
 			stream.on("error", err => {
 				const copy = Object.assign({}, payload);
 				copy.stream = false;
+				copy.seq = ++payload.seq;
 				if (err) {
 					copy.success = false;
-					copy.error = this._createPayloadErrorField(err);
+					copy.error = this._createPayloadErrorField(err, payload);
 				}
 
-				this.logger.debug(`Send stream error to ${nodeID} node.`, copy.error);
+				this.logger.debug(`=> Send stream error to ${nodeID} node.`, copy.error);
 
-				return this.publish(new Packet(P.PACKET_RESPONSE, nodeID, copy))
-					.catch(publishCatch);
+				return this.publish(new Packet(P.PACKET_RESPONSE, nodeID, copy)).catch(
+					publishCatch
+				);
 			});
 
 			payload.data = null;
 			return this.publish(new Packet(P.PACKET_RESPONSE, nodeID, payload))
 				.then(() => {
-					if (payload.stream)
-						stream.resume();
+					if (payload.stream) stream.resume();
 				})
 				.catch(publishCatch);
-
 		}
 
-		return this.publish(new Packet(P.PACKET_RESPONSE, nodeID, payload))
-			.catch(publishCatch);
+		return this.publish(new Packet(P.PACKET_RESPONSE, nodeID, payload)).catch(publishCatch);
 	}
 
 	/**
@@ -841,8 +1315,17 @@ class Transit {
 	 * @memberof Transit
 	 */
 	discoverNodes() {
-		return this.publish(new Packet(P.PACKET_DISCOVER))
-			.catch(err => this.logger.error("Unable to send DISCOVER packet.", err));
+		return this.publish(new Packet(P.PACKET_DISCOVER)).catch(
+			/* istanbul ignore next */ err => {
+				this.logger.error("Unable to send DISCOVER packet.", err);
+
+				this.broker.broadcastLocal("$transit.error", {
+					error: err,
+					module: "transit",
+					type: C.FAILED_NODES_DISCOVERY
+				});
+			}
+		);
 	}
 
 	/**
@@ -851,66 +1334,112 @@ class Transit {
 	 * @memberof Transit
 	 */
 	discoverNode(nodeID) {
-		return this.publish(new Packet(P.PACKET_DISCOVER, nodeID))
-			.catch(err => this.logger.error(`Unable to send DISCOVER packet to '${nodeID}' node.`, err));
+		return this.publish(new Packet(P.PACKET_DISCOVER, nodeID)).catch(
+			/* istanbul ignore next */ err => {
+				this.logger.error(`Unable to send DISCOVER packet to '${nodeID}' node.`, err);
+
+				this.broker.broadcastLocal("$transit.error", {
+					error: err,
+					module: "transit",
+					type: C.FAILED_NODE_DISCOVERY
+				});
+			}
+		);
 	}
 
 	/**
 	 * Send node info package to other nodes.
 	 *
+	 * @param {NodeRawInfo} info
+	 * @param {String} nodeID
 	 * @memberof Transit
 	 */
-	sendNodeInfo(nodeID) {
-		if (!this.connected || !this.isReady) return Promise.resolve();
+	sendNodeInfo(info, nodeID) {
+		if (!this.connected || !this.isReady) return this.Promise.resolve();
 
-		const info = this.broker.getLocalNodeInfo();
+		return this.publish(
+			new Packet(P.PACKET_INFO, nodeID, {
+				services: info.services,
+				ipList: info.ipList,
+				hostname: info.hostname,
+				client: info.client,
+				config: info.config,
+				instanceID: this.broker.instanceID,
+				metadata: info.metadata,
+				seq: info.seq
+			})
+		).catch(
+			/* istanbul ignore next */ err => {
+				this.logger.error(`Unable to send INFO packet to '${nodeID}' node.`, err);
 
-		let p = Promise.resolve();
-		if (!nodeID)
-			p = this.tx.makeBalancedSubscriptions();
-
-		return p.then(() => this.publish(new Packet(P.PACKET_INFO, nodeID, {
-			services: info.services,
-			ipList: info.ipList,
-			hostname: info.hostname,
-			client: info.client,
-			config: info.config,
-			seq: info.seq
-		}))).catch(err => this.logger.error(`Unable to send INFO packet to '${nodeID}' node.`, err));
-
+				this.broker.broadcastLocal("$transit.error", {
+					error: err,
+					module: "transit",
+					type: C.FAILED_SEND_INFO_PACKET
+				});
+			}
+		);
 	}
 
 	/**
 	 * Send ping to a node (or all nodes if nodeID is null)
 	 *
 	 * @param {String} nodeID
+	 * @param {String=} id
 	 * @returns
 	 * @memberof Transit
 	 */
-	sendPing(nodeID) {
-		return this.publish(new Packet(P.PACKET_PING, nodeID, { time: Date.now() }))
-			.catch(err => this.logger.error(`Unable to send PING packet to '${nodeID}' node.`, err));
+	sendPing(nodeID, id) {
+		return this.publish(
+			new Packet(P.PACKET_PING, nodeID, {
+				time: Date.now(),
+				id: id || this.broker.generateUid()
+			})
+		).catch(
+			/* istanbul ignore next */ err => {
+				this.logger.error(`Unable to send PING packet to '${nodeID}' node.`, err);
+
+				this.broker.broadcastLocal("$transit.error", {
+					error: err,
+					module: "transit",
+					type: C.FAILED_SEND_PING_PACKET
+				});
+			}
+		);
 	}
 
 	/**
 	 * Send back pong response
 	 *
-	 * @param {Object} payload
+	 * @param {PacketPingPayload} payload
 	 * @returns
 	 * @memberof Transit
 	 */
 	sendPong(payload) {
-		return this.publish(new Packet(P.PACKET_PONG, payload.sender, {
-			time: payload.time,
-			arrived: Date.now()
-		})).catch(err => this.logger.error(`Unable to send PONG packet to '${payload.sender}' node.`, err));
+		return this.publish(
+			new Packet(P.PACKET_PONG, payload.sender, {
+				time: payload.time,
+				id: payload.id,
+				arrived: Date.now()
+			})
+		).catch(
+			/* istanbul ignore next */ err => {
+				this.logger.error(`Unable to send PONG packet to '${payload.sender}' node.`, err);
+
+				this.broker.broadcastLocal("$transit.error", {
+					error: err,
+					module: "transit",
+					type: C.FAILED_SEND_PONG_PACKET
+				});
+			}
+		);
 	}
 
 	/**
 	 * Process incoming PONG packet.
 	 * Measure ping time & current time difference.
 	 *
-	 * @param {Object} payload
+	 * @param {PacketPongPayload} payload
 	 * @memberof Transit
 	 */
 	processPong(payload) {
@@ -920,55 +1449,60 @@ class Transit {
 
 		// this.logger.debug(`PING-PONG from '${payload.sender}' - Time: ${elapsedTime}ms, Time difference: ${timeDiff}ms`);
 
-		this.broker.broadcastLocal("$node.pong", { nodeID: payload.sender, elapsedTime, timeDiff });
+		this.broker.broadcastLocal("$node.pong", {
+			nodeID: payload.sender,
+			elapsedTime,
+			timeDiff,
+			id: payload.id
+		});
+
+		this.metrics.set(METRIC.MOLECULER_TRANSIT_PONG_TIME, elapsedTime, {
+			targetNodeID: payload.sender
+		});
+		this.metrics.set(METRIC.MOLECULER_TRANSIT_PONG_SYSTIME_DIFF, timeDiff, {
+			targetNodeID: payload.sender
+		});
 	}
 
 	/**
-	 * Send a node heartbeat. It will be called with timer
+	 * Send a node heartbeat. It will be called with timer from local Discoverer.
 	 *
+	 * @params {Node} localNode
 	 * @memberof Transit
 	 */
 	sendHeartbeat(localNode) {
-		return this.publish(new Packet(P.PACKET_HEARTBEAT, null, {
-			cpu: localNode.cpu
-		})).catch(err => this.logger.error("Unable to send HEARTBEAT packet.", err));
+		return this.publish(
+			new Packet(P.PACKET_HEARTBEAT, null, {
+				cpu: localNode.cpu
+			})
+		).catch(
+			/* istanbul ignore next */ err => {
+				this.logger.error("Unable to send HEARTBEAT packet.", err);
 
-	}
-
-	/**
-	 * Subscribe via transporter
-	 *
-	 * @param {String} topic
-	 * @param {String=} nodeID
-	 *
-	 * @memberof Transit
-	 */
-	subscribe(topic, nodeID) {
-		return this.tx.subscribe(topic, nodeID);
+				this.broker.broadcastLocal("$transit.error", {
+					error: err,
+					module: "transit",
+					type: C.FAILED_SEND_HEARTBEAT_PACKET
+				});
+			}
+		);
 	}
 
 	/**
 	 * Publish via transporter
 	 *
-	 * @param {Packet} Packet
+	 * @param {Packet} packet
 	 *
 	 * @memberof Transit
 	 */
 	publish(packet) {
-		// log only if packet type was not disabled by options
-		if (!this.opts.packetLogFilter.includes(packet.type)) {
-			this.logger.debug(`Send ${packet.type} packet to '${packet.target || "<all nodes>"}'`);
-		}
-
 		if (this.subscribing) {
-			return this.subscribing
-				.then(() => {
-					return this.tx.prepublish(packet);
-				});
+			return this.subscribing.then(() => {
+				return this.tx.prepublish(packet);
+			});
 		}
 		return this.tx.prepublish(packet);
 	}
-
 }
 
 module.exports = Transit;

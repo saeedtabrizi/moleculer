@@ -1,10 +1,10 @@
-/* eslint-disable no-console */
 "use strict";
 
 const ServiceBroker = require("../../src/service-broker");
 const Serializers = require("../../src/serializers");
 const P = require("../../src/packets");
 const crypto = require("crypto");
+const _ = require("lodash");
 
 const { getDataFile } = require("../utils");
 
@@ -14,44 +14,66 @@ const benchmark = new Benchmarkify("Serializers benchmark").printHeader();
 let dataFiles = ["10", "1k", "50k", "100k", "buf-10240", "buf-102400"];
 
 function runTest(dataName) {
-
-	let payload = !dataName.startsWith("buf-") ? JSON.parse(getDataFile(dataName + ".json")) : crypto.randomBytes(parseInt(dataName.substr(4)));
+	let payload = !dataName.startsWith("buf-")
+		? JSON.parse(getDataFile(dataName + ".json"))
+		: crypto.randomBytes(parseInt(dataName.substring(4)));
 
 	const broker = new ServiceBroker({ logger: false });
 
 	let JsonSer = new Serializers.JSON();
-	let AvroSer = new Serializers.Avro();
+	let JsonExtSer = new Serializers.JSONExt();
 	let MsgPackSer = new Serializers.MsgPack();
-	let protoBufSer = new Serializers.ProtoBuf();
-	let thriftSer = new Serializers.Thrift();
 	let notepackSer = new Serializers.Notepack();
+	let cborSer = new Serializers.CBOR();
 
 	JsonSer.init(broker);
-	AvroSer.init(broker);
+	JsonExtSer.init(broker);
 	MsgPackSer.init(broker);
-	protoBufSer.init(broker);
-	thriftSer.init(broker);
 	notepackSer.init(broker);
+	cborSer.init(broker);
 
 	let bench1 = benchmark.createSuite(`Serialize packet with ${dataName}bytes`);
 
 	const packet = new P.Packet(P.PACKET_EVENT, "node-101", {
-		ver:"3",
+		ver: "4",
 		sender: "node-100",
+		id: "8b3c7371-7f0a-4aa2-b734-70ede29e1bbb",
 		event: "user.created",
 		data: payload,
-		broadcast: true
+		broadcast: true,
+		meta: {},
+		level: 1,
+		needAck: false
 	});
 
 	bench1.ref("JSON", () => {
 		const packet = new P.Packet(P.PACKET_EVENT, "node-101", {
-			ver:"3",
+			ver: "4",
 			sender: "node-100",
+			id: "8b3c7371-7f0a-4aa2-b734-70ede29e1bbb",
 			event: "user.created",
 			data: payload,
-			broadcast: true
+			broadcast: true,
+			meta: {},
+			level: 1,
+			needAck: false
 		});
 		return JsonSer.serialize(packet.payload, packet.type);
+	});
+
+	bench1.add("JSONExt", () => {
+		const packet = new P.Packet(P.PACKET_EVENT, "node-101", {
+			ver: "4",
+			sender: "node-100",
+			id: "8b3c7371-7f0a-4aa2-b734-70ede29e1bbb",
+			event: "user.created",
+			data: payload,
+			broadcast: true,
+			meta: {},
+			level: 1,
+			needAck: false
+		});
+		return JsonExtSer.serialize(packet.payload, packet.type);
 	});
 
 	/*function circularSerialize(obj) {
@@ -69,83 +91,83 @@ function runTest(dataName) {
 
 	bench1.add("JSON (circular)", () => {
 		const packet = new P.Packet(P.PACKET_EVENT, "node-101", {
-			ver:"3",
+			ver:"4",
 			sender: "node-100",
+			id: "8b3c7371-7f0a-4aa2-b734-70ede29e1bbb",
 			event: "user.created",
 			data: payload,
-			broadcast: true
+			broadcast: true,
+			meta: {},
+			level: 1,
+			needAck: false
+
 		});
 		return circularSerialize(packet.payload, packet.type);
 	});*/
 
-	bench1.add("Avro", () => {
-		const packet = new P.Packet(P.PACKET_EVENT, "node-101", {
-			ver:"3",
-			sender: "node-100",
-			event: "user.created",
-			data: payload,
-			broadcast: true
-		});
-		return AvroSer.serialize(packet.payload, packet.type);
-	});
-
 	bench1.add("MsgPack", () => {
 		const packet = new P.Packet(P.PACKET_EVENT, "node-101", {
-			ver:"3",
+			ver: "4",
 			sender: "node-100",
+			id: "8b3c7371-7f0a-4aa2-b734-70ede29e1bbb",
 			event: "user.created",
 			data: payload,
-			broadcast: true
+			broadcast: true,
+			meta: {},
+			level: 1,
+			needAck: false
 		});
 		return MsgPackSer.serialize(packet.payload, packet.type);
 	});
 
-	bench1.add("ProtoBuf", () => {
-		const packet = new P.Packet(P.PACKET_EVENT, "node-101", {
-			ver:"3",
-			sender: "node-100",
-			event: "user.created",
-			data: payload,
-			broadcast: true
-		});
-		return protoBufSer.serialize(packet.payload, packet.type);
-	});
-
-	bench1.add("Thrift", () => {
-		const packet = new P.Packet(P.PACKET_EVENT, "node-101", {
-			ver:"3",
-			sender: "node-100",
-			event: "user.created",
-			data: payload,
-			broadcast: true
-		});
-		return thriftSer.serialize(packet.payload, packet.type);
-	});
-
 	bench1.add("Notepack", () => {
 		const packet = new P.Packet(P.PACKET_EVENT, "node-101", {
-			ver:"3",
+			ver: "4",
 			sender: "node-100",
+			id: "8b3c7371-7f0a-4aa2-b734-70ede29e1bbb",
 			event: "user.created",
 			data: payload,
-			broadcast: true
+			broadcast: true,
+			meta: {},
+			level: 1,
+			needAck: false
 		});
 		return notepackSer.serialize(packet.payload, packet.type);
 	});
 
-	console.log("JSON length:", JsonSer.serialize(packet.payload, packet.type).length);
-	console.log("Avro length:", AvroSer.serialize(packet.payload, packet.type).length);
-	console.log("MsgPack length:", MsgPackSer.serialize(packet.payload, packet.type).length);
-	console.log("ProtoBuf length:", protoBufSer.serialize(packet.payload, packet.type).length);
-	console.log("Thrift length:", thriftSer.serialize(packet.payload, packet.type).length);
-	console.log("Notepack length:", notepackSer.serialize(packet.payload, packet.type).length);
-
-	return bench1.run()
-		.then(() => {
-			if (dataFiles.length > 0)
-				return runTest(dataFiles.shift());
+	bench1.add("CBOR", () => {
+		const packet = new P.Packet(P.PACKET_EVENT, "node-101", {
+			ver: "4",
+			sender: "node-100",
+			id: "8b3c7371-7f0a-4aa2-b734-70ede29e1bbb",
+			event: "user.created",
+			data: payload,
+			broadcast: true,
+			meta: {},
+			level: 1,
+			needAck: false
 		});
+		return cborSer.serialize(packet.payload, packet.type);
+	});
 
+	console.log("JSON length:", JsonSer.serialize(_.cloneDeep(packet.payload), packet.type).length);
+	console.log(
+		"JSONExt length:",
+		JsonExtSer.serialize(_.cloneDeep(packet.payload), packet.type).length
+	);
+	console.log(
+		"MsgPack length:",
+		MsgPackSer.serialize(_.cloneDeep(packet.payload), packet.type).length
+	);
+	console.log(
+		"Notepack length:",
+		notepackSer.serialize(_.cloneDeep(packet.payload), packet.type).length
+	);
+	console.log("CBOR length:", cborSer.serialize(_.cloneDeep(packet.payload), packet.type).length);
+
+	return bench1.run().then(() => {
+		if (dataFiles.length > 0) return runTest(dataFiles.shift());
+	});
 }
 
 runTest(dataFiles.shift());
@@ -158,141 +180,124 @@ runTest(dataFiles.shift());
 
 Platform info:
 ==============
-   Windows_NT 6.1.7601 x64
-   Node.JS: 8.11.0
-   V8: 6.2.414.50
-   Intel(R) Core(TM) i7-4770K CPU @ 3.50GHz × 8
+   Windows_NT 10.0.19043 x64
+   Node.JS: 14.19.0
+   V8: 8.4.371.23-node.85
+   CPU: Intel(R) Core(TM) i7-4770K CPU @ 3.50GHz × 8
+   Memory: 32 GB
 
-JSON length: 89
-Avro length: 38
-MsgPack length: 69
-ProtoBuf length: 45
-Thrift length: 76
-Notepack length: 81
+JSON length: 169
+JSONExt length: 169
+MsgPack length: 126
+Notepack length: 126
+CBOR length: 133
 Suite: Serialize packet with 10bytes
-√ JSON               803,696 rps
-√ Avro               578,574 rps
-√ MsgPack             75,582 rps
-√ ProtoBuf           745,775 rps
-√ Thrift             110,671 rps
-√ Notepack           652,254 rps
+√ JSON               521 065 rps
+√ JSONExt            221 927 rps
+√ MsgPack             91 100 rps
+√ Notepack           581 182 rps
+√ CBOR             1 096 399 rps
 
-   JSON (#)            0%        (803,696 rps)   (avg: 1μs)
-   Avro           -28.01%        (578,574 rps)   (avg: 1μs)
-   MsgPack         -90.6%         (75,582 rps)   (avg: 13μs)
-   ProtoBuf        -7.21%        (745,775 rps)   (avg: 1μs)
-   Thrift         -86.23%        (110,671 rps)   (avg: 9μs)
-   Notepack       -18.84%        (652,254 rps)   (avg: 1μs)
+   JSON (#)            0%        (521 065 rps)   (avg: 1μs)
+   JSONExt        -57,41%        (221 927 rps)   (avg: 4μs)
+   MsgPack        -82,52%         (91 100 rps)   (avg: 10μs)
+   Notepack       +11,54%        (581 182 rps)   (avg: 1μs)
+   CBOR          +110,42%      (1 096 399 rps)   (avg: 912ns)
 -----------------------------------------------------------------------
 
-JSON length: 1131
-Avro length: 1081
-MsgPack length: 1113
-ProtoBuf length: 1170
-Thrift length: 1364
-Notepack length: 1371
+JSON length: 1211
+JSONExt length: 1211
+MsgPack length: 1081
+Notepack length: 1081
+CBOR length: 1096
 Suite: Serialize packet with 1kbytes
-√ JSON               148,192 rps
-√ Avro               120,391 rps
-√ MsgPack             17,091 rps
-√ ProtoBuf           139,487 rps
-√ Thrift              56,970 rps
-√ Notepack            96,203 rps
+√ JSON               144 653 rps
+√ JSONExt             64 124 rps
+√ MsgPack             17 516 rps
+√ Notepack           135 953 rps
+√ CBOR               218 752 rps
 
-   JSON (#)            0%        (148,192 rps)   (avg: 6μs)
-   Avro           -18.76%        (120,391 rps)   (avg: 8μs)
-   MsgPack        -88.47%         (17,091 rps)   (avg: 58μs)
-   ProtoBuf        -5.87%        (139,487 rps)   (avg: 7μs)
-   Thrift         -61.56%         (56,970 rps)   (avg: 17μs)
-   Notepack       -35.08%         (96,203 rps)   (avg: 10μs)
+   JSON (#)            0%        (144 653 rps)   (avg: 6μs)
+   JSONExt        -55,67%         (64 124 rps)   (avg: 15μs)
+   MsgPack        -87,89%         (17 516 rps)   (avg: 57μs)
+   Notepack        -6,01%        (135 953 rps)   (avg: 7μs)
+   CBOR           +51,23%        (218 752 rps)   (avg: 4μs)
 -----------------------------------------------------------------------
 
-JSON length: 50601
-Avro length: 50552
-MsgPack length: 50583
-ProtoBuf length: 54187
-Thrift length: 61472
-Notepack length: 61479
+JSON length: 50681
+JSONExt length: 50681
+MsgPack length: 46725
+Notepack length: 46725
+CBOR length: 47155
 Suite: Serialize packet with 50kbytes
-√ JSON                 4,056 rps
-√ Avro                 3,984 rps
-√ MsgPack                474 rps
-√ ProtoBuf             4,301 rps
-√ Thrift               3,370 rps
-√ Notepack             2,455 rps
+√ JSON                 4 892 rps
+√ JSONExt              2 129 rps
+√ MsgPack                511 rps
+√ Notepack             3 904 rps
+√ CBOR                 6 197 rps
 
-   JSON (#)            0%          (4,056 rps)   (avg: 246μs)
-   Avro            -1.79%          (3,984 rps)   (avg: 251μs)
-   MsgPack        -88.32%            (474 rps)   (avg: 2ms)
-   ProtoBuf        +6.05%          (4,301 rps)   (avg: 232μs)
-   Thrift         -16.91%          (3,370 rps)   (avg: 296μs)
-   Notepack       -39.48%          (2,455 rps)   (avg: 407μs)
+   JSON (#)            0%          (4 892 rps)   (avg: 204μs)
+   JSONExt        -56,47%          (2 129 rps)   (avg: 469μs)
+   MsgPack        -89,55%            (511 rps)   (avg: 1ms)
+   Notepack       -20,19%          (3 904 rps)   (avg: 256μs)
+   CBOR           +26,68%          (6 197 rps)   (avg: 161μs)
 -----------------------------------------------------------------------
 
-JSON length: 101100
-Avro length: 101051
-MsgPack length: 101084
-ProtoBuf length: 108312
-Thrift length: 122849
-Notepack length: 122858
+JSON length: 101180
+JSONExt length: 101180
+MsgPack length: 93311
+Notepack length: 93311
+CBOR length: 94166
 Suite: Serialize packet with 100kbytes
-√ JSON                 2,045 rps
-√ Avro                 2,024 rps
-√ MsgPack                235 rps
-√ ProtoBuf             2,181 rps
-√ Thrift               1,733 rps
-√ Notepack             1,240 rps
+√ JSON                 2 553 rps
+√ JSONExt              1 101 rps
+√ MsgPack                248 rps
+√ Notepack             2 007 rps
+√ CBOR                 3 176 rps
 
-   JSON (#)            0%          (2,045 rps)   (avg: 489μs)
-   Avro            -1.02%          (2,024 rps)   (avg: 494μs)
-   MsgPack        -88.51%            (235 rps)   (avg: 4ms)
-   ProtoBuf        +6.65%          (2,181 rps)   (avg: 458μs)
-   Thrift         -15.26%          (1,733 rps)   (avg: 577μs)
-   Notepack       -39.38%          (1,240 rps)   (avg: 806μs)
+   JSON (#)            0%          (2 553 rps)   (avg: 391μs)
+   JSONExt        -56,88%          (1 101 rps)   (avg: 908μs)
+   MsgPack        -90,29%            (248 rps)   (avg: 4ms)
+   Notepack       -21,38%          (2 007 rps)   (avg: 498μs)
+   CBOR           +24,44%          (3 176 rps)   (avg: 314μs)
 -----------------------------------------------------------------------
 
-JSON length: 36774
-Avro length: 36725
-MsgPack length: 36756
-ProtoBuf length: 36736
-Thrift length: 36773
-Notepack length: 36780
+JSON length: 36873
+JSONExt length: 13823
+MsgPack length: 10364
+Notepack length: 10364
+CBOR length: 10368
 Suite: Serialize packet with buf-10240bytes
-√ JSON                 2,059 rps
-√ Avro                 2,026 rps
-√ MsgPack             35,863 rps
-√ ProtoBuf             2,109 rps
-√ Thrift               1,905 rps
-√ Notepack           106,605 rps
+√ JSON                 2 042 rps
+√ JSONExt             14 457 rps
+√ MsgPack             67 665 rps
+√ Notepack           277 208 rps
+√ CBOR               431 623 rps
 
-   JSON (#)            0%          (2,059 rps)   (avg: 485μs)
-   Avro            -1.57%          (2,026 rps)   (avg: 493μs)
-   MsgPack       +1,641.94%         (35,863 rps)   (avg: 27μs)
-   ProtoBuf        +2.44%          (2,109 rps)   (avg: 474μs)
-   Thrift          -7.46%          (1,905 rps)   (avg: 524μs)
-   Notepack      +5,077.95%        (106,605 rps)   (avg: 9μs)
+   JSON (#)            0%          (2 042 rps)   (avg: 489μs)
+   JSONExt       +608,16%         (14 457 rps)   (avg: 69μs)
+   MsgPack       +3 214,42%         (67 665 rps)   (avg: 14μs)
+   Notepack      +13 478,41%        (277 208 rps)   (avg: 3μs)
+   CBOR          +21 042,1%        (431 623 rps)   (avg: 2μs)
 -----------------------------------------------------------------------
 
-JSON length: 365859
-Avro length: 365810
-MsgPack length: 365843
-ProtoBuf length: 365821
-Thrift length: 365858
-Notepack length: 365867
+JSON length: 365507
+JSONExt length: 136703
+MsgPack length: 102526
+Notepack length: 102526
+CBOR length: 102530
 Suite: Serialize packet with buf-102400bytes
-√ JSON                   181 rps
-√ Avro                   185 rps
-√ MsgPack              7,451 rps
-√ ProtoBuf               187 rps
-√ Thrift                 172 rps
-√ Notepack            13,976 rps
+√ JSON                   192 rps
+√ JSONExt                949 rps
+√ MsgPack             23 916 rps
+√ Notepack            72 199 rps
+√ CBOR                81 746 rps
 
-   JSON (#)            0%            (181 rps)   (avg: 5ms)
-   Avro            +2.22%            (185 rps)   (avg: 5ms)
-   MsgPack       +4,022.8%          (7,451 rps)   (avg: 134μs)
-   ProtoBuf        +3.42%            (187 rps)   (avg: 5ms)
-   Thrift          -4.59%            (172 rps)   (avg: 5ms)
-   Notepack      +7,633.56%         (13,976 rps)   (avg: 71μs)
+   JSON (#)            0%            (192 rps)   (avg: 5ms)
+   JSONExt       +394,75%            (949 rps)   (avg: 1ms)
+   MsgPack       +12 370,6%         (23 916 rps)   (avg: 41μs)
+   Notepack      +37 547,1%         (72 199 rps)   (avg: 13μs)
+   CBOR          +42 524,7%         (81 746 rps)   (avg: 12μs)
 -----------------------------------------------------------------------
 
 

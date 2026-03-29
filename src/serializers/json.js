@@ -1,19 +1,26 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
 "use strict";
 
-const BaseSerializer  	= require("./base");
+const BaseSerializer = require("./base");
+
+/**
+ * Import types
+ *
+ * @typedef {import("../service-broker")} ServiceBroker
+ * @typedef {import("./json")} JSONSerializerClass
+ */
+
 /**
  * JSON serializer for Moleculer
  *
- * @class JSONSerializer
+ * @implements {JSONSerializerClass}
  */
 class JSONSerializer extends BaseSerializer {
-
 	/**
 	 * Creates an instance of JSONSerializer.
 	 *
@@ -27,7 +34,6 @@ class JSONSerializer extends BaseSerializer {
 	 * Serializer a JS object to Buffer
 	 *
 	 * @param {Object} obj
-	 * @param {String} type of packet
 	 * @returns {Buffer}
 	 *
 	 * @memberof Serializer
@@ -39,8 +45,7 @@ class JSONSerializer extends BaseSerializer {
 	/**
 	 * Deserialize Buffer to JS object
 	 *
-	 * @param {Buffer} buf
-	 * @param {String} type of packet
+	 * @param {any} buf
 	 * @returns {Object}
 	 *
 	 * @memberof Serializer

@@ -1,15 +1,20 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
 "use strict";
 
 const os = require("os");
-const _ = require("lodash");
 const { getIpList } = require("./utils");
 const MOLECULER_VERSION = require("../package.json").version;
+
+/**
+ * Import types
+ *
+ * @typedef {import("./service-broker").NodeHealthStatus} NodeHealthStatus
+ */
 
 const getClientInfo = () => {
 	return {
@@ -20,14 +25,16 @@ const getClientInfo = () => {
 };
 
 const getCpuInfo = () => {
+	const cpus = os.cpus();
 	const load = os.loadavg();
+	const cores = Array.isArray(cpus) ? os.cpus().length : null;
 	const cpu = {
 		load1: load[0],
 		load5: load[1],
 		load15: load[2],
-		cores: os.cpus().length,
+		cores: cores,
+		utilization: cores > 0 ? Math.min(Math.floor((load[0] * 100) / cores), 100) : null
 	};
-	cpu.utilization = Math.min(Math.floor(load[0] * 100 / cpu.cores), 100);
 
 	return cpu;
 };
@@ -35,17 +42,22 @@ const getCpuInfo = () => {
 const getMemoryInfo = () => {
 	const mem = {
 		free: os.freemem(),
-		total: os.totalmem()
+		total: os.totalmem(),
+		percent: null
 	};
-	mem.percent = (mem.free * 100 / mem.total);
+	mem.percent = (mem.free * 100) / mem.total;
 
 	return mem;
 };
 
+/**
+ *
+ * @returns {os.UserInfo| {}}
+ */
 const getUserInfo = () => {
 	try {
 		return os.userInfo();
-	} catch (e) {
+	} catch {
 		return {};
 	}
 };
@@ -73,19 +85,8 @@ const getProcessInfo = () => {
 
 const getNetworkInterfacesInfo = () => {
 	return {
-		ip:  getIpList()
+		ip: getIpList()
 	};
-};
-
-const getTransitStatus = (broker) => {
-	if (broker.transit) {
-		return {
-			stat: _.cloneDeep(broker.transit.stat)
-		};
-	}
-
-	/* istanbul ignore next */
-	return null;
 };
 
 const getDateTimeInfo = () => {
@@ -96,7 +97,11 @@ const getDateTimeInfo = () => {
 	};
 };
 
-const getHealthStatus = (broker) => {
+/**
+ *
+ * @returns {NodeHealthStatus}
+ */
+const getHealthStatus = () => {
 	return {
 		cpu: getCpuInfo(),
 		mem: getMemoryInfo(),
@@ -104,11 +109,7 @@ const getHealthStatus = (broker) => {
 		process: getProcessInfo(),
 		client: getClientInfo(),
 		net: getNetworkInterfacesInfo(),
-		transit: getTransitStatus(broker),
 		time: getDateTimeInfo()
-
-		// TODO: event loop & GC info
-		// https://github.com/RisingStack/trace-nodejs/blob/master/lib/agent/metrics/apm/index.js
 	};
 };
 
@@ -120,6 +121,5 @@ module.exports = {
 	getProcessInfo,
 	getClientInfo,
 	getNetworkInterfacesInfo,
-	getTransitStatus,
 	getDateTimeInfo
 };

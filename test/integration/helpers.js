@@ -4,10 +4,9 @@ const _ = require("lodash");
 const ServiceBroker = require("../../src/service-broker");
 
 const H = {
-	createNode(namespace, nodeID, services) {
-		let node = new ServiceBroker({ namespace, logger: false, nodeID, transporter: "Fake" });
-		if (services)
-			H.addServices(node, services);
+	createNode(opts, services) {
+		let node = new ServiceBroker(_.defaultsDeep(opts, { logger: false, transporter: "Fake" }));
+		if (services) H.addServices(node, services);
 		return node;
 	},
 
@@ -18,13 +17,12 @@ const H = {
 	removeServices(broker, serviceNames) {
 		serviceNames.forEach(name => {
 			let svc = broker.getLocalService(name);
-			if (svc)
-				broker.destroyService(svc);
+			if (svc) broker.destroyService(svc);
 		});
 	},
 
-	hasService(broker, name, nodeID, version) {
-		return broker.registry.services.has(name, version, nodeID);
+	hasService(broker, fullName, nodeID) {
+		return broker.registry.services.has(fullName, nodeID);
 	},
 
 	hasAction(broker, name) {
@@ -41,14 +39,13 @@ const H = {
 
 	getActionNodes(broker, actionName) {
 		const list = broker.registry.actions.get(actionName);
-		if (list)
-			return list.endpoints.map(ep => ep.id);
+		if (list) return list.endpoints.map(ep => ep.id);
 
 		/* istanbul ignore next */
 		return [];
 	},
 
-	getEventNodes(broker,eventName) {
+	getEventNodes(broker, eventName) {
 		return broker.registry.events.getAllEndpoints(eventName).map(node => node.id);
 	}
 };

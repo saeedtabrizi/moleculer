@@ -1,24 +1,30 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
 "use strict";
 
-const net 			= require("net");
-const EventEmitter 	= require("events");
-const Promise		= require("bluebird");
-const Parser		= require("./parser");
+const net = require("net");
+const EventEmitter = require("events");
+const Parser = require("./parser");
+
+/**
+ * Import types
+ *
+ * @typedef {import("./tcp-reader")} TcpReaderClass
+ * @typedef {import("net").Socket} Socket
+ */
 
 /**
  * TCP Reader for TcpTransporter
  *
  * @class TcpReader
  * @extends {EventEmitter}
+ * @implements {TcpReaderClass}
  */
 class TcpReader extends EventEmitter {
-
 	/**
 	 * Creates an instance of TcpReader.
 	 *
@@ -32,6 +38,7 @@ class TcpReader extends EventEmitter {
 		this.server = null;
 		this.opts = opts;
 		this.transporter = transporter;
+		this.Promise = transporter.broker.Promise;
 		this.logger = transporter.logger;
 
 		this.sockets = [];
@@ -44,26 +51,22 @@ class TcpReader extends EventEmitter {
 	 * @memberof TcpReader
 	 */
 	listen() {
-		return new Promise((resolve, reject) => {
-
+		return new this.Promise((resolve, reject) => {
 			const server = net.createServer(socket => this.onTcpClientConnected(socket));
 
 			server.on("error", err => {
 				this.logger.error("Server error.", err);
 
-				if (reject)
-					reject(err);
+				if (reject) reject(err);
 			});
 
-			let h = this.opts.port;
-
-			// Node >= 8.x support exclusive port mapping for clustering
-			if (process.versions.node.split(".")[0] >= 8)
-				h = { port: this.opts.port, exclusive: true };
+			const h = { port: this.opts.port, exclusive: true };
 
 			// Listening
 			server.listen(h, () => {
-				this.opts.port = this.server.address().port;
+				this.opts.port = /** @type {import("net").AddressInfo} */ (
+					this.server.address()
+				).port;
 				this.logger.info(`TCP server is listening on port ${this.opts.port}`);
 				this.connected = true;
 
@@ -102,12 +105,12 @@ class TcpReader extends EventEmitter {
 
 		parser.on("error", err => {
 			this.logger.warn("Packet parser error!", err);
-			this.closeSocket(socket, err);
+			this.closeSocket(socket);
 		});
 
 		socket.on("error", err => {
 			this.logger.debug(`TCP client '${address}' error!`, err);
-			this.closeSocket(socket, err);
+			this.closeSocket(socket);
 		});
 
 		socket.on("close", hadError => {

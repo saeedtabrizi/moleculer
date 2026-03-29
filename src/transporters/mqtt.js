@@ -1,27 +1,34 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
 "use strict";
 
-const Promise = require("bluebird");
 const Transporter = require("./base");
 const { isObject } = require("lodash");
+const C = require("../constants");
+
+/**
+ * Import types
+ *
+ * @typedef {import("./mqtt")} MqttTransporterClass
+ * @typedef {import("./mqtt").MqttTransporterOptions} MqttTransporterOptions
+ */
 
 /**
  * Transporter for MQTT
  *
  * @class MqttTransporter
  * @extends {Transporter}
+ * @implements {MqttTransporterClass}
  */
 class MqttTransporter extends Transporter {
-
 	/**
 	 * Creates an instance of MqttTransporter.
 	 *
-	 * @param {any} opts
+	 * @param {MqttTransporterOptions} opts
 	 *
 	 * @memberof MqttTransporter
 	 */
@@ -51,13 +58,17 @@ class MqttTransporter extends Transporter {
 	 * @memberof MqttTransporter
 	 */
 	connect() {
-		return new Promise((resolve, reject) => {
+		return new this.broker.Promise((resolve, reject) => {
 			let mqtt;
 			try {
 				mqtt = require("mqtt");
-			} catch(err) {
+			} catch (err) {
 				/* istanbul ignore next */
-				this.broker.fatal("The 'mqtt' package is missing. Please install it with 'npm install mqtt --save' command.", err, true);
+				this.broker.fatal(
+					"The 'mqtt' package is missing. Please install it with 'npm install mqtt --save' command.",
+					err,
+					true
+				);
 			}
 
 			const client = mqtt.connect(this.opts);
@@ -71,12 +82,17 @@ class MqttTransporter extends Transporter {
 			});
 
 			/* istanbul ignore next */
-			client.on("error", (e) => {
+			client.on("error", e => {
 				this.logger.error("MQTT error.", e.message);
 				this.logger.debug(e);
 
-				if (!client.connected)
-					reject(e);
+				this.broker.broadcastLocal("$transporter.error", {
+					error: e,
+					module: "transporter",
+					type: C.CLIENT_ERROR
+				});
+
+				if (!client.connected) reject(e);
 			});
 
 			/* istanbul ignore next */
@@ -84,9 +100,10 @@ class MqttTransporter extends Transporter {
 				this.logger.warn("MQTT client is reconnecting...");
 			});
 
-			client.on("message", (topic, msg) => {
-				const cmd = topic.split(this.topicSeparator)[1];
-				this.incomingMessage(cmd, msg);
+			client.on("message", (rawTopic, buf) => {
+				const topic = rawTopic.substring(this.prefix.length + this.topicSeparator.length);
+				const cmd = topic.split(this.topicSeparator)[0];
+				this.receive(cmd, buf);
 			});
 
 			/* istanbul ignore next */
@@ -104,7 +121,7 @@ class MqttTransporter extends Transporter {
 	 */
 	disconnect() {
 		if (this.client) {
-			return new Promise(resolve => {
+			return new this.broker.Promise(resolve => {
 				this.client.end(false, resolve);
 				this.client = null;
 			});
@@ -120,7 +137,9 @@ class MqttTransporter extends Transporter {
 	 * @memberof MqttTransporter
 	 */
 	getTopicName(cmd, nodeID) {
-		return this.prefix + this.topicSeparator + cmd + (nodeID ? this.topicSeparator + nodeID : "");
+		return (
+			this.prefix + this.topicSeparator + cmd + (nodeID ? this.topicSeparator + nodeID : "")
+		);
 	}
 
 	/**
@@ -132,13 +151,12 @@ class MqttTransporter extends Transporter {
 	 * @memberof MqttTransporter
 	 */
 	subscribe(cmd, nodeID) {
-		return new Promise((resolve, reject) => {
+		return new this.broker.Promise((resolve, reject) => {
 			const topic = this.getTopicName(cmd, nodeID);
 			this.client.subscribe(topic, { qos: this.qos }, (err, granted) => {
-				if (err)
-					return reject(err);
+				if (err) return reject(err);
 
-				this.logger.info("MQTT server granted", granted);
+				this.logger.debug("MQTT server granted", granted);
 
 				resolve();
 			});
@@ -146,30 +164,48 @@ class MqttTransporter extends Transporter {
 	}
 
 	/**
-	 * Publish a packet
+	 * Subscribe to balanced action commands
+	 * Not implemented.
 	 *
-	 * @param {Packet} packet
-	 *
-	 * @memberof MqttTransporter
+	 * @returns {Promise}
 	 */
-	publish(packet) {
+	subscribeBalancedRequest() {
+		/* istanbul ignore next */
+		return this.broker.Promise.resolve();
+	}
+
+	/**
+	 * Subscribe to balanced event command
+	 * Not implemented.
+	 *
+	 * @returns {Promise}
+	 */
+	subscribeBalancedEvent() {
+		/* istanbul ignore next */
+		return this.broker.Promise.resolve();
+	}
+
+	/**
+	 * Send data buffer.
+	 *
+	 * @param {String} topic
+	 * @param {Buffer} data
+	 *
+	 * @returns {Promise}
+	 */
+	send(topic, data) {
 		/* istanbul ignore next*/
 		if (!this.client) return;
 
-		return new Promise((resolve, reject) => {
-			const data = this.serialize(packet);
-			this.incStatSent(data.length);
-			const topic = this.getTopicName(packet.type, packet.target);
+		return new this.broker.Promise((resolve, reject) => {
 			this.client.publish(topic, data, { qos: this.qos }, err => {
 				/* istanbul ignore next*/
-				if (err)
-					return reject(err);
+				if (err) return reject(err);
 
 				resolve();
 			});
 		});
 	}
-
 }
 
 module.exports = MqttTransporter;

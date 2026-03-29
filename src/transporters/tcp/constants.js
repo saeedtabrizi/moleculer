@@ -1,6 +1,6 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
@@ -9,7 +9,6 @@
 const P = require("../../packets");
 
 module.exports = {
-
 	PACKET_EVENT_ID: 1,
 	PACKET_REQUEST_ID: 2,
 	PACKET_RESPONSE_ID: 3,

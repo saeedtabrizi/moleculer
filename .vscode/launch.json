@@ -11,7 +11,7 @@
 			"program": "${workspaceRoot}/dev/index.js",
 			"cwd": "${workspaceRoot}",
 			"args": [
-				"event-wildcard"
+				"${fileBasenameNoExtension}"
 			],
 		},
 		{
@@ -47,24 +47,39 @@
 			"env": {
 				"TRANSPORTER": "TCP"
 			},
-			"args": [
-				"client-debug"
-			]
+			"args": ["client-debug"]
+		},
+		{
+			"type": "node",
+			"request": "launch",
+			"name": "Launch demo: multi-nodes",
+			"program": "${workspaceRoot}/examples/multi-nodes/index.js",
+			"cwd": "${workspaceRoot}"
+		},
+		{
+			"type": "node",
+			"request": "launch",
+			"name": "Launch demo: opentelemetry",
+			"program": "${workspaceRoot}/examples/opentelemetry/index.js",
+			"runtimeArgs": [
+				"-r",
+				"./examples/opentelemetry/tracing.js"
+			],
+			"cwd": "${workspaceRoot}"
 		},
 		{
 			"type": "node",
 			"request": "launch",
 			"name": "Launch benchmark",
 			"program": "${workspaceRoot}/benchmark/index.js",
-			"args": ["cachers"],
+			"args": ["common"],
 			"cwd": "${workspaceRoot}/benchmark"
 		},
 		{
 			"type": "node",
 			"request": "launch",
 			"name": "Launch perf",
-			"program": "${workspaceRoot}/benchmark/perf-runner.js",
-			"cwd": "${workspaceRoot}/benchmark"
+			"program": "${workspaceRoot}/benchmark/perf-runner.js"
 		},
 		{
 			"type": "node",
@@ -74,24 +89,23 @@
 			"args": ["--runInBand"],
 			"console": "internalConsole",
 			"cwd": "${workspaceRoot}",
-			"runtimeArgs": [
-                "--nolazy"
-            ]
+			"runtimeArgs": ["--nolazy"]
 		},
 		{
 			"type": "node",
 			"request": "launch",
-			"name": "Jest transporter",
+			"name": "Jest single",
 			"program": "${workspaceRoot}/node_modules/jest-cli/bin/jest.js",
-			"args": ["--runInBand", "--testMatch", "**/transporters/**/**spc.js"],
-			"cwd": "${workspaceRoot}",
+			"args": ["--runInBand", "${fileBasenameNoExtension}"],
 			"console": "internalConsole",
+			"cwd": "${workspaceRoot}",
 			"runtimeArgs": [
                 "--nolazy"
             ],
-			"env": {
-				"AMQP_URI": "amqp://192.168.51.29:5672"
-			}
+			"outFiles": [
+				"${workspaceFolder}/**/*.js",
+				"!**/node_modules/**"
+			]
 		},
 		{
 			"type": "node",
@@ -101,9 +115,7 @@
 			"args": ["--runInBand", "--testMatch", "**/integration/transporters/**/**spc.js"],
 			"cwd": "${workspaceRoot}",
 			"console": "internalConsole",
-			"runtimeArgs": [
-                "--nolazy"
-            ],
+			"runtimeArgs": ["--nolazy"],
 			"env": {
 				"AMQP_URI": "amqp://192.168.51.29:5672"
 			}
@@ -111,23 +123,60 @@
 		{
 			"type": "node",
 			"request": "launch",
+			"name": "Launch E2E test",
+			"program": "${workspaceRoot}/test/e2e/scenarios/dependencies/scenario.js",
+			"cwd": "${workspaceRoot}/test/e2e/scenarios/dependencies",
+			"env": {
+				"TRANSPORTER": "Kafka",
+				"DISCOVERER": "Etcd3",
+				"LOGLEVEL": "debug"
+			},
+		},
+		{
+			"type": "node",
+			"request": "launch",
 			"name": "Moleculer-runner",
 			"program": "${workspaceRoot}/bin/moleculer-runner.js",
-			"cwd": "${workspaceRoot}",
+			"cwd": "${workspaceRoot}/examples/runner",
 			"env": {
 				"NAMESPACE": "test",
-				"MOLECULER_NAMESPACE": "long",
-				"MOLECULER_LOG_LEVEL": "debug",
-				"MOLECULER_REGISTRY__STRATEGY": "random"
+				"MOL_NAMESPACE": "long",
+				"MOL_LOG_LEVEL": "debug",
+				"MOL_REGISTRY__STRATEGY": "random",
+				"MOL_CACHER__OPTIONS__PREFIX": "MOL"
 			},
 			"args": [
+				"--hot",
+				"--repl",
+				"-c",
+				"moleculer.config.async.js",
+				"svc/"
+			],
+			"outFiles": [
+				"${workspaceFolder}/**/*.js",
+				"!**/node_modules/**"
+			]
+		},
+		{
+			"type": "node",
+			"request": "launch",
+			"name": "Moleculer-runner ESM",
+			"program": "${workspaceRoot}/bin/moleculer-runner.mjs",
+			"cwd": "${workspaceRoot}",
+			"args": [
+				"--hot",
+				"--repl",
+				"-c",
+				"examples/esm/moleculer.config.mjs",
+				"examples/esm/greeter.service.mjs",
+				"examples/esm/welcome.service.cjs"
 			]
 		},
 		{
 			"type": "node",
 			"request": "attach",
-			"name": "Attach to Process",
-			"port": 5858
-		}
+			"name": "Attach by Process ID",
+			"processId": "${command:PickProcess}"
+		},
 	]
 }

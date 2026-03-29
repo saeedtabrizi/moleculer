@@ -1,12 +1,12 @@
 /*
  * moleculer
- * Copyright (c) 2018 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
  * MIT Licensed
  */
 
 "use strict";
 
-const _ = require("lodash");
+const { isObject, isString, isInheritedClass } = require("../utils");
 const { BrokerOptionsError } = require("../errors");
 
 const Cachers = {
@@ -18,48 +18,42 @@ const Cachers = {
 
 function getByName(name) {
 	/* istanbul ignore next */
-	if (!name)
-		return null;
+	if (!name) return null;
 
 	let n = Object.keys(Cachers).find(n => n.toLowerCase() == name.toLowerCase());
-	if (n)
-		return Cachers[n];
+	if (n) return Cachers[n];
 }
 
 /**
  * Resolve cacher by name
  *
- * @param {object|string} opt
- * @returns {Cacher}
+ * @param {Record<string,any>|string|boolean} opt
+ * @returns {any}
  */
 function resolve(opt) {
-	if (opt instanceof Cachers.Base) {
+	if (isObject(opt) && isInheritedClass(opt, Cachers.Base)) {
 		return opt;
 	} else if (opt === true) {
 		return new Cachers.Memory();
-	} else if (_.isString(opt)) {
+	} else if (isString(opt)) {
 		let CacherClass = getByName(opt);
-		if (CacherClass)
-			return new CacherClass();
+		if (CacherClass) return new CacherClass();
 
-		if (opt.startsWith("redis://"))
-			CacherClass = Cachers.Redis;
+		if (opt.startsWith("redis://") || opt.startsWith("rediss://")) CacherClass = Cachers.Redis;
 
-		if (CacherClass)
-			return new CacherClass(opt);
-		else
-			throw new BrokerOptionsError(`Invalid cacher type '${opt}'.`, { type: opt });
-
-	} else if (_.isObject(opt)) {
+		if (CacherClass) return new CacherClass(opt);
+		else throw new BrokerOptionsError(`Invalid cacher type '${opt}'.`, { type: opt });
+	} else if (isObject(opt)) {
 		let CacherClass = getByName(opt.type || "Memory");
-		if (CacherClass)
-			return new CacherClass(opt.options);
-		else
-			throw new BrokerOptionsError(`Invalid cacher type '${opt.type}'.`, { type: opt.type });
+		if (CacherClass) return new CacherClass(opt.options);
+		else throw new BrokerOptionsError(`Invalid cacher type '${opt.type}'.`, { type: opt.type });
 	}
 
 	return null;
 }
 
-module.exports = Object.assign({ resolve }, Cachers);
+function register(name, value) {
+	Cachers[name] = value;
+}
 
+module.exports = Object.assign(Cachers, { resolve, register });

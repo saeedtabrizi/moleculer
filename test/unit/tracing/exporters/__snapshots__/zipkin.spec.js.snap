@@ -1,0 +1,77 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`Test Zipkin tracing exporter class Test makePayload should convert errored span to zipkin payload 1`] = `
+{
+  "annotations": [
+    {
+      "endpoint": {
+        "ipv4": "",
+        "port": 0,
+        "serviceName": "v1.posts",
+      },
+      "timestamp": 1050000,
+      "value": "error",
+    },
+  ],
+  "debug": false,
+  "duration": 50000,
+  "id": "spanid1234567890",
+  "kind": "SERVER",
+  "localEndpoint": {
+    "serviceName": "v1.posts",
+  },
+  "name": "Test Span",
+  "parentId": "parentid12345678",
+  "remoteEndpoint": {
+    "serviceName": "v1.posts",
+  },
+  "shared": true,
+  "tags": {
+    "a": "5",
+    "b": "John",
+    "c": "true",
+    "d": "null",
+    "def": "ault",
+    "error": "Something happened",
+    "error.code": "512",
+    "error.data.a": "5",
+    "error.message": "Something happened",
+    "error.name": "MoleculerRetryableError",
+    "error.retryable": "true",
+    "service": "v1.posts",
+    "span.type": "action",
+  },
+  "timestamp": 1000000,
+  "traceId": "traceid123456789",
+}
+`;
+
+exports[`Test Zipkin tracing exporter class Test makePayload should convert normal span to zipkin payload 1`] = `
+{
+  "annotations": [],
+  "debug": false,
+  "duration": 50000,
+  "id": "spanid1234567890",
+  "kind": "SERVER",
+  "localEndpoint": {
+    "serviceName": "v1.posts",
+  },
+  "name": "Test Span",
+  "parentId": "parentid12345678",
+  "remoteEndpoint": {
+    "serviceName": "v1.posts",
+  },
+  "shared": true,
+  "tags": {
+    "a": "5",
+    "b": "John",
+    "c": "true",
+    "d": "null",
+    "def": "ault",
+    "service": "v1.posts",
+    "span.type": "custom",
+  },
+  "timestamp": 1000000,
+  "traceId": "traceid123456789",
+}
+`;

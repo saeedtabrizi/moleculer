@@ -1,49 +1,68 @@
+/*
+ * moleculer
+ * Copyright (c) 2023 MoleculerJS (https://github.com/moleculerjs/moleculer)
+ * MIT Licensed
+ */
+
 "use strict";
 
 const BaseSerializer = require("./base");
+
 /**
- * JSON serializer for Moleculer
+ * Import types
  *
- * @class JSONSerializer
+ * @typedef {import("../service-broker")} ServiceBroker
+ * @typedef {import("./notepack")} NotepackSerializerClass
+ */
+
+/**
+ * Notepack serializer for Moleculer
+ *
+ * @implements {NotepackSerializerClass}
  */
 class NotepackSerializer extends BaseSerializer {
 	/**
-   * Creates an instance of JSONSerializer.
-   *
-   * @memberof NotepackSerializer
-   */
-	constructor() {
-		super();
+	 * Initialize Serializer
+	 *
+	 * @param {any} broker
+	 *
+	 * @memberof Serializer
+	 */
+	init(broker) {
+		super.init(broker);
+
 		try {
 			this.codec = require("notepack.io");
-		} catch(err) {
+		} catch (err) {
 			/* istanbul ignore next */
-			this.broker.fatal("The 'notepack.io' package is missing! Please install it with 'npm install notepack.io --save' command!", err, true);
+			this.broker.fatal(
+				"The 'notepack.io' package is missing! Please install it with 'npm install notepack.io --save' command!",
+				err,
+				true
+			);
 		}
 	}
 
 	/**
-   * Serializer a JS object to Buffer
-   *
-   * @param {Object} obj
-   * @param {String} type of packet
-   * @returns {Buffer}
-   *
-   * @memberof Serializer
-   */
+	 * Serializer a JS object to Buffer
+	 *
+	 * @param {Object} obj
+	 * @returns {Buffer}
+	 *
+	 * @memberof Serializer
+	 */
 	serialize(obj) {
 		return this.codec.encode(obj);
 	}
 
 	/**
-   * Deserialize Buffer to JS object
-   *
-   * @param {Buffer} buf
-   * @param {String} type of packet
-   * @returns {Object}
-   *
-   * @memberof Serializer
-   */
+	 * Deserialize Buffer to JS object
+	 *
+	 * @param {Buffer|string} buf
+	 * @returns {Object}
+	 *
+	 * @memberof Serializer
+	 */
 	deserialize(buf) {
 		return this.codec.decode(buf);
 	}

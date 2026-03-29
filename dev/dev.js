@@ -1,55 +1,43 @@
 const ServiceBroker = require("../src/service-broker");
 
 const broker = new ServiceBroker({
-	//namespace: "test",
-	nodeID: "broker-1",
-	transporter: "NATS",
-	transit: {
-		disableVersionCheck: true
-	} ,
-	middlewares: [
-		{
-			localCall: (next) => {
-				return function(ctx) {
-					console.log("The \"call\" is called.", ctx.action.name);
-					return next(ctx).then(res => {
-						console.log("Response:", res);
-						return res;
-					});
-				};
-			},
+	transporter: "Redis",
+
+	metrics: {
+		enabled: true
+	},
+
+	tracing: {
+		enabled: true,
+		sampling: {
+			rate: 1.0
 		},
-	],
+		events: true,
+		exporter: {
+			type: "Event"
+		}
+	}
 });
 
 broker.createService({
-	name: "test1",
-	settings: {
-		rest: true
-	},
+	name: "greeter",
 	actions: {
-		test: {
-			rest: "hello",
+		welcome: {
 			handler(ctx) {
-				ctx.meta.x = 3;
-				return "Hello World";
+				return `Hello ${ctx.params.name}`;
 			}
-		},
+		}
 	},
+	events: {
+		"$tracing.spans"(ctx) {
+			this.logger.info("Span event received", ctx.params);
+		}
+	}
 });
 
-broker.createService({
-	name: "test2",
-	actions: {
-		test: (ctx) => {
-			return ctx.call("test1.test");
-		},
-	},
-});
-
-broker.start().then(() => {
-	const meta = { x: 2 };
-	broker.call("test2.test", {}, { meta }).then((msg) => {
-		console.log(msg, meta);
-	});
-});
+broker
+	.start()
+	.then(() => broker.repl())
+	.then(() => broker.call("greeter.welcome", { name: "Icebob" }))
+	.then(res => broker.logger.info("Result:", res))
+	.catch(err => broker.logger.error(err));
